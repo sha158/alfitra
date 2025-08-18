@@ -3,6 +3,7 @@ const admin = require('firebase-admin');
 
 const initializeFirebaseAdmin = () => {
   try {
+<<<<<<< HEAD
     let serviceAccount;
 
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -22,6 +23,15 @@ const initializeFirebaseAdmin = () => {
     }
 
     console.log('✅ Firebase Admin SDK initialized successfully');
+=======
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+
+    console.log('Firebase Admin SDK initialized successfully');
+>>>>>>> 5ec1f4e (initial changes)
   } catch (error) {
     console.error('❌ Error initializing Firebase Admin:', error);
   }
