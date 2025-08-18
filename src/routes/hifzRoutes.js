@@ -12,7 +12,7 @@ const {
   getHifzProgress
 } = require('../controllers/hifzController');
 const { protect } = require('../middleware/auth');
-const { isTeacher, isParent, isTeacherOrAdmin } = require('../middleware/roleCheck');
+const { isTeacher, isParent, isTeacherOrAdmin } = require('../middleware/rolecheck');
 const { ensureTenant } = require('../middleware/tenantCheck');
 
 // All routes require authentication and tenant check

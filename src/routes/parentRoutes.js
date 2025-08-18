@@ -13,7 +13,7 @@ const {
   getFeeReceipts
 } = require('../controllers/parentController');
 const { protect } = require('../middleware/auth');
-const { isParent } = require('../middleware/roleCheck');
+const { isParent } = require('../middleware/rolecheck');
 const { ensureTenant } = require('../middleware/tenantCheck');
 
 // All routes require authentication and parent role

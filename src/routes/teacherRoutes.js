@@ -26,7 +26,7 @@ const {
   getClassStudents
 } = require('../controllers/teacherController');
 const { protect } = require('../middleware/auth');
-const { isTeacher, isTeacherOrAdmin } = require('../middleware/roleCheck');
+const { isTeacher, isTeacherOrAdmin } = require('../middleware/rolecheck');
 const { ensureTenant } = require('../middleware/tenantCheck');
 
 // All routes require authentication and teacher role

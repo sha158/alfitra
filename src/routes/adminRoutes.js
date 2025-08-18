@@ -39,7 +39,7 @@ const {
   getNotificationStats
 } = require('../controllers/notificationController');
 const { protect } = require('../middleware/auth');
-const { isAdmin } = require('../middleware/roleCheck');
+const { isAdmin } = require('../middleware/rolecheck');
 const { ensureTenant } = require('../middleware/tenantCheck');
 
 // All routes require authentication and admin role

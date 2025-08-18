@@ -11,7 +11,7 @@ const {
   removeSuperAdmin
 } = require('../controllers/superAdminController');
 const { protect } = require('../middleware/auth');
-const { isSuperAdmin } = require('../middleware/roleCheck');
+const { isSuperAdmin } = require('../middleware/rolecheck');
 
 // All routes require authentication and super admin role
 router.use(protect);
