@@ -1,6 +1,38 @@
+# Node.js dependencies
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
 .env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Uploads (keep .gitkeep for empty folder)
 uploads/*
 !uploads/.gitkeep
-.DS_Store
-*.log
+
+# Build outputs
+dist/
+build/
+
+# Firebase / Google service account keys
+src/config/serviceAccountKey.json
+
+# Editor settings
+.vscode/
+.idea/
+*.swp
