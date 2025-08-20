@@ -30,7 +30,6 @@ dist/
 build/
 
 # Firebase / Google service account keys
-src/config/serviceAccountKey.json
 
 # Editor settings
 .vscode/
