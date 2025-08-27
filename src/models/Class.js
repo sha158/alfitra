@@ -18,7 +18,6 @@ const classSchema = new mongoose.Schema({
   
   section: {
     type: String,
-    required: [true, 'Section is required'],
     trim: true,
     uppercase: true
   },
@@ -94,7 +93,27 @@ const classSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
-  }
+  },
+
+  // New fields based on user request
+  description: {
+    type: String,
+    trim: true,
+    default: null // Making it optional
+  },
+  startDate: {
+    type: Date,
+    default: null // Making it optional
+  },
+  endDate: {
+    type: Date,
+    default: null // Making it optional
+  },
+  feeStructure: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'FeeStructure',
+    required: [true, 'Fee structure ID is required']
+  }],
 }, {
   timestamps: true
 });

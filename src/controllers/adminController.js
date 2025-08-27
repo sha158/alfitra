@@ -186,15 +186,19 @@ const createClass = async (req, res) => {
       subjectTeachers,
       room,
       maxStudents,
-      schedule
+      schedule,
+      description,
+      startDate,
+      endDate,
+      feeStructure
     } = req.body;
 
     // Validate required fields
-    if (!name || !section || !classTeacher || !subjectTeachers || subjectTeachers.length === 0) {
+    if (!name || !classTeacher || !subjectTeachers || subjectTeachers.length === 0 || !feeStructure) {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: 'Class name, section, class teacher, and at least one subject with teacher are required'
+        message: 'Class name, class teacher, subject teachers, and fee structure are required.'
       });
     }
 
@@ -271,7 +275,11 @@ const createClass = async (req, res) => {
       schedule: schedule || {
         startTime: "09:00",
         endTime: "15:00"
-      }
+      },
+      description,
+      startDate,
+      endDate,
+      feeStructure
     };
     
     const newClass = await Class.create([classData], { session });
@@ -683,40 +691,75 @@ const getStudents = async (req, res) => {
   }
 };
 
-// @desc    Update student
+// @desc    Update student and their parent's details
 // @route   PUT /api/admin/students/:id
 // @access  Private/Admin
 const updateStudent = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const student = await Student.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        tenant: req.user.tenant._id
-      },
-      req.body,
-      {
-        new: true,
-        runValidators: true
-      }
-    ).populate('class parent');
-    
+    const {
+      parentFirstName,
+      parentLastName,
+      parentEmail,
+      parentPhone,
+      parentOccupation,
+      ...studentData
+    } = req.body;
+
+    // Step 1: Find the student to get the parent's ID
+    const student = await Student.findOne({
+      _id: req.params.id,
+      tenant: req.user.tenant._id
+    }).session(session);
+
     if (!student) {
-      return res.status(404).json({
-        success: false,
-        message: 'Student not found'
-      });
+      await session.abortTransaction();
+      return res.status(404).json({ success: false, message: 'Student not found' });
     }
+
+    // Step 2: If parent details are provided, update the parent's User record
+    const parentUpdatePayload = {};
+    if (parentFirstName) parentUpdatePayload.firstName = parentFirstName;
+    if (parentLastName) parentUpdatePayload.lastName = parentLastName;
+    if (parentEmail) parentUpdatePayload.email = parentEmail;
+    if (parentPhone) parentUpdatePayload.phone = parentPhone;
+    if (parentOccupation) parentUpdatePayload['parentInfo.occupation'] = parentOccupation;
+
+    if (Object.keys(parentUpdatePayload).length > 0 && student.parent) {
+      await User.updateOne(
+        { _id: student.parent, tenant: req.user.tenant._id, role: 'parent' },
+        { $set: parentUpdatePayload },
+        { runValidators: true, session }
+      );
+    }
+
+    // Step 3: Update the student record with student-specific data
+    Object.assign(student, studentData);
+    await student.save({ session });
+
+    // Step 4: Commit the transaction
+    await session.commitTransaction();
     
+    // Step 5: Populate the updated student with fresh parent data for the response
+    const populatedStudent = await student.populate('class parent');
+
     res.status(200).json({
       success: true,
-      data: student
+      data: populatedStudent,
+      message: 'Student and parent details updated successfully.'
     });
+
   } catch (error) {
+    await session.abortTransaction();
     res.status(400).json({
       success: false,
-      message: 'Error updating student',
+      message: 'Error updating details',
       error: error.message
     });
+  } finally {
+    session.endSession();
   }
 };
 

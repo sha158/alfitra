@@ -395,7 +395,7 @@ const getStudentFees = async (req, res) => {
 
 
 // Helper function: School-level summary
-async function getStudentLevelSummary(baseQuery, studentId) {
+async function getSchoolLevelSummary(baseQuery, studentId) {
   const assignments = await FeeAssignment.find({
     ...baseQuery,
     student: studentId
