@@ -24,6 +24,7 @@ Thumbs.db
 # Uploads (keep .gitkeep for empty folder)
 uploads/*
 !uploads/.gitkeep
+src/config/alfitrah_firebase.json
 
 # Build outputs
 dist/
