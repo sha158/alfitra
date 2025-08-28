@@ -559,6 +559,183 @@ const updateClass = async (req, res) => {
     session.endSession();
   }
 };
+// @desc    Delete class (soft delete)
+// @route   DELETE /api/admin/classes/:id
+// @access  Private/Admin
+const deleteClass = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const classId = req.params.id;
+    const tenantId = req.user.tenant._id;
+
+    // Find the class
+    const classToDelete = await Class.findOne({
+      _id: classId,
+      tenant: tenantId
+    }).session(session);
+
+    if (!classToDelete) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Class not found'
+      });
+    }
+
+    // Check if there are active students in this class
+    const activeStudentsCount = await Student.countDocuments({
+      class: classId,
+      tenant: tenantId,
+      isActive: true
+    }).session(session);
+
+    if (activeStudentsCount > 0) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete class. There are ${activeStudentsCount} active student(s) enrolled in this class. Please transfer or remove students first.`
+      });
+    }
+
+    // Check for any pending fee assignments
+    const pendingFees = await FeeAssignment.countDocuments({
+      tenant: tenantId,
+      'student.class': classId,
+      status: { $in: ['pending', 'partially_paid'] }
+    }).session(session);
+
+    if (pendingFees > 0) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete class. There are ${pendingFees} pending fee assignment(s) associated with this class.`
+      });
+    }
+
+    // Remove class from all fee structures
+    await FeeStructure.updateMany(
+      { classes: classId },
+      { $pull: { classes: classId } },
+      { session }
+    );
+
+    // Soft delete the class
+    classToDelete.isActive = false;
+    classToDelete.deletedAt = new Date();
+    classToDelete.deletedBy = req.user._id;
+    
+    await classToDelete.save({ session });
+
+    await session.commitTransaction();
+
+    res.status(200).json({
+      success: true,
+      message: `Class ${classToDelete.displayName} has been successfully deleted`,
+      data: {
+        id: classToDelete._id,
+        name: classToDelete.displayName
+      }
+    });
+
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('Error deleting class:', error);
+    res.status(400).json({
+      success: false,
+      message: 'Error deleting class',
+      error: error.message
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
+// Alternative: Hard delete (permanently remove) - use with caution
+const hardDeleteClass = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const classId = req.params.id;
+    const tenantId = req.user.tenant._id;
+
+    // Find the class
+    const classToDelete = await Class.findOne({
+      _id: classId,
+      tenant: tenantId
+    }).session(session);
+
+    if (!classToDelete) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Class not found'
+      });
+    }
+
+    // Check if there are any students (active or inactive) in this class
+    const totalStudentsCount = await Student.countDocuments({
+      class: classId,
+      tenant: tenantId
+    }).session(session);
+
+    if (totalStudentsCount > 0) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot permanently delete class. There are ${totalStudentsCount} student record(s) associated with this class.`
+      });
+    }
+
+    // Check for any fee assignments (including historical)
+    const totalFeeAssignments = await FeeAssignment.countDocuments({
+      tenant: tenantId,
+      'student.class': classId
+    }).session(session);
+
+    if (totalFeeAssignments > 0) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot permanently delete class. There are ${totalFeeAssignments} fee assignment record(s) associated with this class.`
+      });
+    }
+
+    // Remove class from all fee structures
+    await FeeStructure.updateMany(
+      { classes: classId },
+      { $pull: { classes: classId } },
+      { session }
+    );
+
+    // Permanently delete the class
+    await Class.deleteOne({ _id: classId }, { session });
+
+    await session.commitTransaction();
+
+    res.status(200).json({
+      success: true,
+      message: `Class ${classToDelete.displayName} has been permanently deleted`,
+      data: {
+        id: classToDelete._id,
+        name: classToDelete.displayName
+      }
+    });
+
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('Error permanently deleting class:', error);
+    res.status(400).json({
+      success: false,
+      message: 'Error permanently deleting class',
+      error: error.message
+    });
+  } finally {
+    session.endSession();
+  }
+};
 
 // @desc    Get available teachers for class assignment
 // @route   GET /api/admin/teachers/available
@@ -1203,6 +1380,7 @@ module.exports = {
   getStudents,
   updateStudent,
   deleteStudent,
+  deleteClass,
   resetUserPassword,
   getDashboardData,
   getAvailableTeachers

@@ -29,6 +29,7 @@ const {
   updateClass,
   createStudent,
   getStudents,
+  deleteClass,
   updateStudent,
   deleteStudent,
   resetUserPassword,
@@ -211,6 +212,10 @@ router.route('/announcements')
 router.route('/announcements/:id')
   .put(updateAnnouncement)
   .delete(deleteAnnouncement);
+
+router.route('/classes/:id')
+  .put(updateClass)
+  .delete(deleteClass); 
 
 // Debug routes (remove in production)
 router.get('/fees/debug/:classId', async (req, res) => {
