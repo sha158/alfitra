@@ -17,10 +17,10 @@ const feeStructureSchema = new mongoose.Schema({
   },
   
   category: {
-  type: String,
-  required: [true, 'Category is required']
-  // Remove the enum to allow any category code
-},
+    type: mongoose.Schema.Types.ObjectId,  // Changed to ObjectId
+    ref: 'FeeCategory',
+    required: [true, 'Category is required']
+  },
   
   classes: [{
     type: mongoose.Schema.Types.ObjectId,
@@ -34,10 +34,10 @@ const feeStructureSchema = new mongoose.Schema({
   },
   
   frequency: {
-  type: String,
-  required: [true, 'Frequency is required']
-  // Remove the enum to allow any frequency code
-},
+    type: mongoose.Schema.Types.ObjectId,  // Changed to ObjectId
+    ref: 'FeeFrequency',
+    required: [true, 'Frequency is required']
+  },
   
   academicYear: {
     type: String,
@@ -58,6 +58,32 @@ const feeStructureSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+
+feeStructureSchema.virtual('categoryInfo', {
+  ref: 'FeeCategory',
+  localField: 'category',
+  foreignField: 'code',
+  justOne: true,
+  match: function() {
+    return { tenant: this.tenant };
+  }
+});
+
+// Virtual populate for frequency  
+feeStructureSchema.virtual('frequencyInfo', {
+  ref: 'FeeFrequency',
+  localField: 'frequency',
+  foreignField: 'code',
+  justOne: true,
+  match: function() {
+    return { tenant: this.tenant };
+  }
+});
+
+// Ensure virtual fields are included in JSON output
+feeStructureSchema.set('toJSON', { virtuals: true });
+feeStructureSchema.set('toObject', { virtuals: true });
 
 // Fee Assignment Schema - assigns fees to students (simplified without installments)
 const feeAssignmentSchema = new mongoose.Schema({

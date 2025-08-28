@@ -39,6 +39,8 @@ const {
 const {
   createFeeStructure,
   getFeeStructures,
+  updateFeeStructure,
+  deleteFeeStructure,
   assignFeeToStudent,
   getStudentFees,
   recordFeePayment,
@@ -146,6 +148,10 @@ router.put('/users/:id/reset-password', resetUserPassword);
 router.route('/fees/structure')
   .get(getFeeStructures)
   .post(createFeeStructure);
+
+router.route('/fees/structure/:id')
+  .put(updateFeeStructure)
+  .delete(deleteFeeStructure);
 
 router.post('/fees/assign', assignFeeToStudent);
 router.get('/fees/student/:studentId', getStudentFees);

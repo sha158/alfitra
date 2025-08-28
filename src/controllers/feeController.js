@@ -44,7 +44,10 @@ const getFeeStructures = async (req, res) => {
     const feeStructures = await FeeStructure.find({
       tenant: req.user.tenant._id,
       isActive: true
-    }).populate('classes', 'name section');
+    })
+    .populate('classes', 'name section')
+    .populate('category', 'name code description')  // Direct populate
+    .populate('frequency', 'name code description monthsInterval');  // Direct populate
     
     res.status(200).json({
       success: true,
@@ -55,6 +58,74 @@ const getFeeStructures = async (req, res) => {
     res.status(400).json({
       success: false,
       message: 'Error fetching fee structures',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update fee structure
+// @route   PUT /api/admin/fees/structure/:id
+// @access  Private/Admin
+const updateFeeStructure = async (req, res) => {
+  try {
+    let feeStructure = await FeeStructure.findOne({
+      _id: req.params.id,
+      tenant: req.user.tenant._id
+    });
+
+    if (!feeStructure) {
+      return res.status(404).json({
+        success: false,
+        message: 'Fee structure not found'
+      });
+    }
+
+    feeStructure = await FeeStructure.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true
+    });
+
+    res.status(200).json({
+      success: true,
+      data: feeStructure
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: 'Error updating fee structure',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Delete fee structure
+// @route   DELETE /api/admin/fees/structure/:id
+// @access  Private/Admin
+const deleteFeeStructure = async (req, res) => {
+  try {
+    const feeStructure = await FeeStructure.findOne({
+      _id: req.params.id,
+      tenant: req.user.tenant._id
+    });
+
+    if (!feeStructure) {
+      return res.status(404).json({
+        success: false,
+        message: 'Fee structure not found'
+      });
+    }
+
+    // Soft delete by setting isActive to false
+    await FeeStructure.findByIdAndUpdate(req.params.id, { isActive: false });
+
+    res.status(200).json({
+      success: true,
+      message: 'Fee structure deleted successfully'
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: 'Error deleting fee structure',
       error: error.message
     });
   }
@@ -248,6 +319,8 @@ const getPayments = async (req, res) => {
 // @desc    Get comprehensive fee summary with school, class, and student levels
 // @route   GET /api/admin/fees/summary/:level/:id?
 // @access  Private/Admin
+// Replace the getSchoolFeeSummary function with this corrected version:
+
 const getSchoolFeeSummary = async (req, res) => {
   try {
     const { academicYear } = req.query;
@@ -257,7 +330,117 @@ const getSchoolFeeSummary = async (req, res) => {
     const query = { tenant: tenantId };
     if (academicYear) query.academicYear = academicYear;
     
-    const summary = await getSchoolLevelSummary(query);
+    // Get all fee assignments for the school
+    const assignments = await FeeAssignment.find(query)
+      .populate('feeStructure', 'name category frequency')
+      .populate('student', 'firstName lastName studentId class rollNumber');
+    
+    // Filter out assignments with null students
+    const validAssignments = assignments.filter(a => a.student !== null);
+    
+    // Get all classes for grouping
+    const classes = await Class.find({ tenant: tenantId }).select('name section displayName');
+    const classMap = {};
+    classes.forEach(cls => {
+      classMap[cls._id.toString()] = cls.displayName || `${cls.name} ${cls.section}`;
+    });
+    
+    const summary = {
+      level: 'school',
+      totalStudents: new Set(validAssignments.map(a => a.student._id.toString())).size,
+      totalAssignments: validAssignments.length,
+      totalExpected: 0,
+      totalCollected: 0,
+      totalPending: 0,
+      totalOverdue: 0,
+      classWiseSummary: {},
+      categoryWiseSummary: {},
+      recentPayments: []
+    };
+    
+    // Process each assignment
+    for (const assignment of validAssignments) {
+      assignment.updateStatus();
+      
+      const pending = assignment.calculatePendingAmount();
+      const classId = assignment.student.class?.toString();
+      const className = classMap[classId] || 'Unknown Class';
+      const category = assignment.feeStructure?.category || 'other';
+      
+      // Initialize class summary if not exists
+      if (!summary.classWiseSummary[className]) {
+        summary.classWiseSummary[className] = {
+          expected: 0,
+          collected: 0,
+          pending: 0,
+          overdue: 0,
+          studentCount: new Set()
+        };
+      }
+      
+      // Initialize category summary if not exists
+      if (!summary.categoryWiseSummary[category]) {
+        summary.categoryWiseSummary[category] = {
+          expected: 0,
+          collected: 0,
+          pending: 0,
+          overdue: 0
+        };
+      }
+      
+      // Update totals
+      summary.totalExpected += assignment.finalAmount || 0;
+      summary.totalCollected += assignment.paidAmount || 0;
+      
+      // Update class-wise totals
+      summary.classWiseSummary[className].expected += assignment.finalAmount || 0;
+      summary.classWiseSummary[className].collected += assignment.paidAmount || 0;
+      summary.classWiseSummary[className].studentCount.add(assignment.student._id.toString());
+      
+      // Update category-wise totals
+      summary.categoryWiseSummary[category].expected += assignment.finalAmount || 0;
+      summary.categoryWiseSummary[category].collected += assignment.paidAmount || 0;
+      
+      // Handle pending amounts
+      if (pending > 0) {
+        if (assignment.status === FEE_STATUS.OVERDUE) {
+          summary.totalOverdue += pending;
+          summary.classWiseSummary[className].overdue += pending;
+          summary.categoryWiseSummary[category].overdue += pending;
+        } else {
+          summary.totalPending += pending;
+          summary.classWiseSummary[className].pending += pending;
+          summary.categoryWiseSummary[category].pending += pending;
+        }
+      }
+    }
+    
+    // Convert student count sets to numbers
+    Object.keys(summary.classWiseSummary).forEach(className => {
+      summary.classWiseSummary[className].studentCount = 
+        summary.classWiseSummary[className].studentCount.size;
+    });
+    
+    // Get recent payments (last 10)
+    const recentPayments = await FeePayment.find({ tenant: tenantId })
+      .populate('student', 'firstName lastName')
+      .populate('collectedBy', 'firstName lastName')
+      .sort('-paymentDate')
+      .limit(10);
+    
+    summary.recentPayments = recentPayments.map(p => ({
+      paymentId: p._id,
+      amount: p.amount,
+      date: p.paymentDate,
+      studentName: p.student ? `${p.student.firstName} ${p.student.lastName}` : 'Unknown',
+      collectedBy: p.collectedBy ? `${p.collectedBy.firstName} ${p.collectedBy.lastName}` : 'Unknown',
+      method: p.paymentMethod
+    }));
+    
+    // Calculate collection rate
+    summary.collectionRate = summary.totalExpected > 0 
+      ? ((summary.totalCollected / summary.totalExpected) * 100).toFixed(2) 
+      : 0;
     
     res.status(200).json({
       success: true,
@@ -321,6 +504,7 @@ const getStudentFeeSummary = async (req, res) => {
     });
   }
 };
+
 
 // In your feeController.js, find the getStudentFees function and replace it with this:
 
@@ -860,6 +1044,8 @@ const getFeeSummary = async (req, res) => {
 module.exports = {
   createFeeStructure,
   getFeeStructures,
+  updateFeeStructure,
+  deleteFeeStructure,
   assignFeeToStudent,
   getStudentFees,
   recordFeePayment,
