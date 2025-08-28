@@ -4,6 +4,22 @@ const router = express.Router();
 const Class = require('../models/Class');
 const mongoose = require('mongoose');
 const {
+  initializeDefaultCategories,
+  getFeeCategories,
+  createFeeCategory,
+  updateFeeCategory,
+  deleteFeeCategory,
+  getCategoriesDropdown
+} = require('../controllers/feeCategoryController');
+const {
+  initializeDefaultFrequencies,
+  getFeeFrequencies,
+  createFeeFrequency,
+  updateFeeFrequency,
+  deleteFeeFrequency,
+  getFrequenciesDropdown
+} = require('../controllers/feeFrequencyController');
+const {
   createTeacher,
   getTeachers,
   updateTeacher,
@@ -161,6 +177,28 @@ router.get('/fees/summary/comprehensive', (req, res, next) => {
   req.query.level = 'all';
   next();
 }, getFeeSummary);
+
+router.post('/fees/categories/init', initializeDefaultCategories); // Initialize default categories
+router.get('/fees/categories/dropdown', getCategoriesDropdown); // Simplified list for dropdowns
+
+router.route('/fees/categories')
+  .get(getFeeCategories)      // Get all categories
+  .post(createFeeCategory);   // Create custom category
+
+router.route('/fees/categories/:id')
+  .put(updateFeeCategory)     // Update category
+  .delete(deleteFeeCategory);
+
+  router.post('/fees/frequencies/init', initializeDefaultFrequencies); // Initialize default frequencies
+router.get('/fees/frequencies/dropdown', getFrequenciesDropdown); // Simplified list for dropdowns
+
+router.route('/fees/frequencies')
+  .get(getFeeFrequencies)      // Get all frequencies
+  .post(createFeeFrequency);   // Create custom frequency
+
+router.route('/fees/frequencies/:id')
+  .put(updateFeeFrequency)     // Update frequency
+  .delete(deleteFeeFrequency); // Delete frequency
 
 // Notification routes
 router.post('/notifications', sendNotification);

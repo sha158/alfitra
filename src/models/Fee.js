@@ -17,10 +17,10 @@ const feeStructureSchema = new mongoose.Schema({
   },
   
   category: {
-    type: String,
-    required: true,
-    enum: ['tuition', 'transport', 'library', 'laboratory', 'sports', 'exam', 'admission', 'other']
-  },
+  type: String,
+  required: [true, 'Category is required']
+  // Remove the enum to allow any category code
+},
   
   classes: [{
     type: mongoose.Schema.Types.ObjectId,
@@ -34,10 +34,10 @@ const feeStructureSchema = new mongoose.Schema({
   },
   
   frequency: {
-    type: String,
-    required: true,
-    enum: ['one-time', 'monthly', 'quarterly', 'half-yearly', 'yearly']
-  },
+  type: String,
+  required: [true, 'Frequency is required']
+  // Remove the enum to allow any frequency code
+},
   
   academicYear: {
     type: String,

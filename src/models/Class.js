@@ -111,8 +111,7 @@ const classSchema = new mongoose.Schema({
   },
   feeStructure: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'FeeStructure',
-    required: [true, 'Fee structure ID is required']
+    ref: 'FeeStructure'
   }],
 }, {
   timestamps: true

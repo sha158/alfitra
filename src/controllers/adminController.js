@@ -173,6 +173,15 @@ const deleteTeacher = async (req, res) => {
 // @desc    Create a new class with subjects and teachers
 // @route   POST /api/admin/classes
 // @access  Private/Admin
+// @desc    Create a new class with subjects and teachers
+// @route   POST /api/admin/classes
+// @access  Private/Admin
+// @desc    Create a new class with subjects and teachers
+// @route   POST /api/admin/classes
+// @access  Private/Admin
+// @desc    Create a new class with subjects and teachers
+// @route   POST /api/admin/classes
+// @access  Private/Admin
 const createClass = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -190,15 +199,15 @@ const createClass = async (req, res) => {
       description,
       startDate,
       endDate,
-      feeStructure
+      feeStructure  // This should be an array of fee structure IDs
     } = req.body;
 
     // Validate required fields
-    if (!name || !classTeacher || !subjectTeachers || subjectTeachers.length === 0 || !feeStructure) {
+    if (!name || !classTeacher || !subjectTeachers || subjectTeachers.length === 0) {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: 'Class name, class teacher, subject teachers, and fee structure are required.'
+        message: 'Class name, class teacher, and subject teachers are required.'
       });
     }
 
@@ -245,6 +254,38 @@ const createClass = async (req, res) => {
       });
     }
 
+    // Validate fee structures if provided
+    let validFeeStructureIds = [];
+    if (feeStructure && feeStructure.length > 0) {
+      console.log('Received feeStructure:', feeStructure);
+  console.log('Type of feeStructure:', typeof feeStructure);
+  console.log('Is array?:', Array.isArray(feeStructure));
+      // Ensure feeStructure is an array
+      const feeStructureIds = Array.isArray(feeStructure) ? feeStructure : [feeStructure];
+      console.log('feeStructureIds after processing:', feeStructureIds);
+      
+      const validFeeStructures = await FeeStructure.find({
+        _id: { $in: feeStructureIds },
+        tenant: req.user.tenant._id,
+        isActive: true
+      }).session(session);
+      console.log('Found validFeeStructures:', validFeeStructures.length);
+  console.log('Valid fee structures details:', validFeeStructures.map(fs => ({ id: fs._id, name: fs.name })));
+
+
+      if (validFeeStructures.length !== feeStructureIds.length) {
+         console.log('Validation failed - expected:', feeStructureIds.length, 'found:', validFeeStructures.length);
+        await session.abortTransaction();
+        return res.status(400).json({
+          success: false,
+          message: 'One or more fee structures not found or are not active'
+        });
+      }
+      
+      validFeeStructureIds = validFeeStructures.map(fs => fs._id);
+      console.log('validFeeStructureIds:', validFeeStructureIds);
+    }
+
     // Generate academic year if not provided
     let finalAcademicYear = academicYear;
     if (!finalAcademicYear) {
@@ -263,14 +304,14 @@ const createClass = async (req, res) => {
     const classData = {
       tenant: req.user.tenant._id,
       name,
-      section,
+      section: section || '',
       academicYear: finalAcademicYear,
       classTeacher,
       subjectTeachers: subjectTeachers.map(st => ({
         teacher: st.teacher,
         subject: st.subject.trim()
       })),
-      room,
+      room: room || '',
       maxStudents: maxStudents || 40,
       schedule: schedule || {
         startTime: "09:00",
@@ -279,22 +320,34 @@ const createClass = async (req, res) => {
       description,
       startDate,
       endDate,
-      feeStructure
+      feeStructure: validFeeStructureIds // Use the validated fee structure IDs
     };
     
     const newClass = await Class.create([classData], { session });
+    
+    // Update fee structures to include this class - THIS IS THE CRITICAL PART
+    if (validFeeStructureIds.length > 0) {
+      await FeeStructure.updateMany(
+        { _id: { $in: validFeeStructureIds } },
+        { $addToSet: { classes: newClass[0]._id } },
+        { session }
+      );
+      
+      console.log(`Updated ${validFeeStructureIds.length} fee structures to include class ${newClass[0]._id}`);
+    }
     
     await session.commitTransaction();
     
     // Populate the created class for response
     const populatedClass = await Class.findById(newClass[0]._id)
       .populate('classTeacher', 'firstName lastName email')
-      .populate('subjectTeachers.teacher', 'firstName lastName email');
+      .populate('subjectTeachers.teacher', 'firstName lastName email')
+      .populate('feeStructure', 'name category amount frequency academicYear description');
     
     res.status(201).json({
       success: true,
       data: populatedClass,
-      message: 'Class created successfully with assigned teachers and subjects'
+      message: 'Class created successfully with assigned teachers, subjects, and fee structures'
     });
   } catch (error) {
     await session.abortTransaction();
@@ -307,7 +360,12 @@ const createClass = async (req, res) => {
     session.endSession();
   }
 };
-
+// @desc    Get all classes
+// @route   GET /api/admin/classes
+// @access  Private/Admin
+// @desc    Get all classes
+// @route   GET /api/admin/classes
+// @access  Private/Admin
 // @desc    Get all classes
 // @route   GET /api/admin/classes
 // @access  Private/Admin
@@ -318,8 +376,9 @@ const getClasses = async (req, res) => {
       isActive: true
     })
     .populate('classTeacher', 'firstName lastName email')
-    .populate('subjectTeachers.teacher', 'firstName lastName email');
-    
+    .populate('subjectTeachers.teacher', 'firstName lastName email')
+    .populate('feeStructure', 'name category amount frequency academicYear description isActive');
+
     res.status(200).json({
       success: true,
       count: classes.length,
@@ -337,12 +396,29 @@ const getClasses = async (req, res) => {
 // @desc    Update class
 // @route   PUT /api/admin/classes/:id
 // @access  Private/Admin
+// @desc    Update class
+// @route   PUT /api/admin/classes/:id
+// @access  Private/Admin
 const updateClass = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { classTeacher, subjectTeachers } = req.body;
+    const { classTeacher, subjectTeachers, feeStructure } = req.body;
+
+    // Find the existing class first
+    const existingClass = await Class.findOne({
+      _id: req.params.id,
+      tenant: req.user.tenant._id
+    }).session(session);
+
+    if (!existingClass) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Class not found'
+      });
+    }
 
     // If updating teachers, validate them
     if (classTeacher) {
@@ -390,12 +466,71 @@ const updateClass = async (req, res) => {
       }
     }
 
+    // Handle fee structure updates
+    let validFeeStructureIds = undefined;
+    if ('feeStructure' in req.body) {
+      // If feeStructure is explicitly provided (even as empty array)
+      validFeeStructureIds = [];
+      
+      if (feeStructure && feeStructure.length > 0) {
+        console.log('Received feeStructure:', feeStructure);
+  console.log('Type of feeStructure:', typeof feeStructure);
+  console.log('Is array?:', Array.isArray(feeStructure));
+        const feeStructureIds = Array.isArray(feeStructure) ? feeStructure : [feeStructure];
+        console.log('feeStructureIds after processing:', feeStructureIds);
+        
+        const validFeeStructures = await FeeStructure.find({
+          _id: { $in: feeStructureIds },
+          tenant: req.user.tenant._id,
+          isActive: true
+        }).session(session);
+
+        console.log('Found validFeeStructures:', validFeeStructures.length);
+  console.log('Valid fee structures details:', validFeeStructures.map(fs => ({ id: fs._id, name: fs.name })));
+
+        if (validFeeStructures.length !== feeStructureIds.length) {
+          console.log('Validation failed - expected:', feeStructureIds.length, 'found:', validFeeStructures.length);
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: 'One or more fee structures not found or are not active'
+          });
+        }
+        
+        validFeeStructureIds = validFeeStructures.map(fs => fs._id);
+        console.log('validFeeStructureIds:', validFeeStructureIds);
+      }
+
+      // Remove this class from all fee structures first
+      await FeeStructure.updateMany(
+        { classes: existingClass._id },
+        { $pull: { classes: existingClass._id } },
+        { session }
+      );
+
+      // Add this class to the new fee structures
+      if (validFeeStructureIds.length > 0) {
+        await FeeStructure.updateMany(
+          { _id: { $in: validFeeStructureIds } },
+          { $addToSet: { classes: existingClass._id } },
+          { session }
+        );
+      }
+    }
+
+    // Prepare update data
+    const updateData = { ...req.body };
+    if (validFeeStructureIds !== undefined) {
+      updateData.feeStructure = validFeeStructureIds;
+    }
+
+    // Update the class
     const classData = await Class.findOneAndUpdate(
       {
         _id: req.params.id,
         tenant: req.user.tenant._id
       },
-      req.body,
+      updateData,
       {
         new: true,
         runValidators: true,
@@ -403,21 +538,15 @@ const updateClass = async (req, res) => {
       }
     )
     .populate('classTeacher', 'firstName lastName email')
-    .populate('subjectTeachers.teacher', 'firstName lastName email');
-    
-    if (!classData) {
-      await session.abortTransaction();
-      return res.status(404).json({
-        success: false,
-        message: 'Class not found'
-      });
-    }
+    .populate('subjectTeachers.teacher', 'firstName lastName email')
+    .populate('feeStructure', 'name category amount frequency academicYear description');
     
     await session.commitTransaction();
     
     res.status(200).json({
       success: true,
-      data: classData
+      data: classData,
+      message: 'Class updated successfully'
     });
   } catch (error) {
     await session.abortTransaction();
