@@ -90,7 +90,7 @@ const getFeeFrequencies = async (req, res) => {
       frequencies.map(async (frequency) => {
         const usageCount = await FeeStructure.countDocuments({
           tenant: req.user.tenant._id,
-          frequency: frequency.code
+          frequency: frequency._id
         });
         
         return {

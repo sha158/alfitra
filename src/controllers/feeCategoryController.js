@@ -90,7 +90,7 @@ const getFeeCategories = async (req, res) => {
       categories.map(async (category) => {
         const usageCount = await FeeStructure.countDocuments({
           tenant: req.user.tenant._id,
-          category: category.code
+          category: category._id
         });
         
         return {

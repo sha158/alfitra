@@ -172,10 +172,11 @@ const trackChildFees = async (req, res) => {
       });
     }
     
-    // Get fee assignments
+    // Get fee assignments - exclude cancelled assignments
     const feeAssignments = await FeeAssignment.find({
       tenant: req.user.tenant._id,
-      student: studentId
+      student: studentId,
+      status: { $ne: 'cancelled' }
     }).populate('feeStructure');
     
     // Update status for each assignment

@@ -149,7 +149,15 @@ const feeAssignmentSchema = new mongoose.Schema({
   paymentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'FeePayment'
-  }
+  },
+  
+  // Cancellation fields
+  cancelledAt: Date,
+  cancelledBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  cancellationReason: String
 }, {
   timestamps: true
 });

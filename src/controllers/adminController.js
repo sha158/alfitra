@@ -599,10 +599,18 @@ const deleteClass = async (req, res) => {
       });
     }
 
-    // Check for any pending fee assignments
+    // Get all students in this class to check for fee assignments
+    const studentsInClass = await Student.find({
+      class: classId,
+      tenant: tenantId
+    }).select('_id').session(session);
+    
+    const studentIds = studentsInClass.map(student => student._id);
+    
+    // Check for any pending fee assignments for students in this class
     const pendingFees = await FeeAssignment.countDocuments({
       tenant: tenantId,
-      'student.class': classId,
+      student: { $in: studentIds },
       status: { $in: ['pending', 'partially_paid'] }
     }).session(session);
 
@@ -610,7 +618,7 @@ const deleteClass = async (req, res) => {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: `Cannot delete class. There are ${pendingFees} pending fee assignment(s) associated with this class.`
+        message: `Cannot delete class. There are ${pendingFees} pending fee assignment(s) associated with students in this class. Please clear all pending fees first.`
       });
     }
 
@@ -620,6 +628,29 @@ const deleteClass = async (req, res) => {
       { $pull: { classes: classId } },
       { session }
     );
+
+    // If there are any students in this class (inactive or transferred), 
+    // we should mark their unpaid fee assignments as cancelled to prevent them 
+    // from showing up in fee summaries
+    if (studentIds.length > 0) {
+      await FeeAssignment.updateMany(
+        {
+          tenant: tenantId,
+          student: { $in: studentIds },
+          status: { $in: ['pending', 'partially_paid', 'overdue'] },
+          paidAmount: { $lt: 1 } // Only cancel completely unpaid fees
+        },
+        {
+          $set: {
+            status: 'cancelled',
+            cancelledAt: new Date(),
+            cancelledBy: req.user._id,
+            cancellationReason: `Class ${classToDelete.displayName} was deleted`
+          }
+        },
+        { session }
+      );
+    }
 
     // Soft delete the class
     classToDelete.isActive = false;
@@ -689,10 +720,18 @@ const hardDeleteClass = async (req, res) => {
       });
     }
 
-    // Check for any fee assignments (including historical)
+    // Get all students (including inactive) in this class to check for fee assignments
+    const allStudentsInClass = await Student.find({
+      class: classId,
+      tenant: tenantId
+    }).select('_id').session(session);
+    
+    const allStudentIds = allStudentsInClass.map(student => student._id);
+    
+    // Check for any fee assignments (including historical) for students in this class
     const totalFeeAssignments = await FeeAssignment.countDocuments({
       tenant: tenantId,
-      'student.class': classId
+      student: { $in: allStudentIds }
     }).session(session);
 
     if (totalFeeAssignments > 0) {
@@ -1299,7 +1338,10 @@ const getDashboardData = async (req, res) => {
 async function getFeeStatistics(tenantId) {
   const { FeeAssignment, FeePayment } = require('../models/Fee');
   
-  const assignments = await FeeAssignment.find({ tenant: tenantId });
+  const assignments = await FeeAssignment.find({ 
+    tenant: tenantId,
+    status: { $ne: 'cancelled' }
+  });
   
   let totalExpected = 0;
   let totalCollected = 0;

@@ -326,8 +326,11 @@ const getSchoolFeeSummary = async (req, res) => {
     const { academicYear } = req.query;
     const tenantId = req.user.tenant._id;
     
-    // Build base query
-    const query = { tenant: tenantId };
+    // Build base query - exclude cancelled assignments
+    const query = { 
+      tenant: tenantId,
+      status: { $ne: 'cancelled' }
+    };
     if (academicYear) query.academicYear = academicYear;
     
     // Get all fee assignments for the school
@@ -705,10 +708,11 @@ async function getClassLevelSummary(baseQuery, classId) {
   
   const studentIds = students.map(s => s._id);
   
-  // Get fee assignments for these students
+  // Get fee assignments for these students - exclude cancelled assignments
   const assignments = await FeeAssignment.find({
     ...baseQuery,
-    student: { $in: studentIds }
+    student: { $in: studentIds },
+    status: { $ne: 'cancelled' }
   })
   .populate('student', 'firstName lastName studentId rollNumber')
   .populate('feeStructure', 'name category frequency');
@@ -808,7 +812,8 @@ async function getClassLevelSummary(baseQuery, classId) {
 async function getStudentLevelSummary(baseQuery, studentId) {
   const assignments = await FeeAssignment.find({
     ...baseQuery,
-    student: studentId
+    student: studentId,
+    status: { $ne: 'cancelled' }
   })
   .populate('feeStructure', 'name category frequency')
   .populate('student', 'firstName lastName studentId class rollNumber');

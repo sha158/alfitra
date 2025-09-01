@@ -11,7 +11,9 @@ const USER_ROLES = {
 const FEE_STATUS = {
   PAID: 'paid',
   PENDING: 'pending',
-  OVERDUE: 'overdue'
+  PARTIALLY_PAID: 'partially_paid',
+  OVERDUE: 'overdue',
+  CANCELLED: 'cancelled'
 };
 
 // Leave status
