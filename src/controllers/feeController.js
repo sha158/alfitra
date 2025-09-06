@@ -209,19 +209,47 @@ const recordFeePayment = async (req, res) => {
   try {
     const {
       studentId,
+      student, // Support both studentId and student
       feeAssignmentId,
       amount,
       paymentMethod,
       transactionId,
-      remarks
+      remarks,
+      academic_year
     } = req.body;
     
-    // Get fee assignment
-    const feeAssignment = await FeeAssignment.findOne({
-      _id: feeAssignmentId,
-      tenant: req.user.tenant._id,
-      student: studentId
-    });
+    // Use studentId if provided, otherwise use student
+    const actualStudentId = studentId || student;
+    
+    let feeAssignment;
+    
+    if (feeAssignmentId) {
+      // If feeAssignmentId is provided, use it (existing behavior)
+      feeAssignment = await FeeAssignment.findOne({
+        _id: feeAssignmentId,
+        tenant: req.user.tenant._id,
+        student: actualStudentId
+      });
+    } else if (actualStudentId && academic_year) {
+      // If no feeAssignmentId but student and academic_year provided, find pending assignments
+      // Handle both "2025" and "2025-2026" format academic years
+      const academicYearStr = academic_year.toString();
+      const academicYearPattern = academicYearStr.includes('-') 
+        ? academicYearStr 
+        : new RegExp(`^${academicYearStr}`); // Match "2025" to "2025-2026"
+      
+      feeAssignment = await FeeAssignment.findOne({
+        tenant: req.user.tenant._id,
+        student: actualStudentId,
+        academicYear: academicYearPattern,
+        status: { $in: ['pending', 'partially_paid', 'overdue'] }
+      }).sort({ dueDate: 1 }); // Get the earliest due assignment first
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Either feeAssignmentId or both student and academic_year must be provided'
+      });
+    }
     
     if (!feeAssignment) {
       return res.status(404).json({
@@ -242,8 +270,8 @@ const recordFeePayment = async (req, res) => {
     // Create payment record
     const payment = await FeePayment.create({
       tenant: req.user.tenant._id,
-      student: studentId,
-      feeAssignment: feeAssignmentId,
+      student: actualStudentId,
+      feeAssignment: feeAssignment._id,
       amount,
       paymentMethod,
       transactionId,
