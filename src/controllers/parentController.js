@@ -5,7 +5,10 @@ const Note = require('../models/Note');
 const { FeeAssignment, FeePayment } = require('../models/Fee');
 const Leave = require('../models/Leave');
 const Attendance = require('../models/Attendance');
-const { FEE_STATUS } = require('../config/constants');
+const Class = require('../models/Class');
+const { Notification } = require('../models/Notification');
+const { FEE_STATUS, NOTIFICATION_TARGET } = require('../config/constants');
+const { sendFCMNotification } = require('./notificationController');
 
 // @desc    Get parent's children
 // @route   GET /api/parent/children
@@ -273,6 +276,60 @@ const trackChildFees = async (req, res) => {
   }
 };
 
+// Helper function to send leave notification to class teacher
+const sendLeaveNotificationToTeacher = async (leave, student, parent) => {
+  try {
+    // Get class details with class teacher information
+    const classObj = await Class.findById(student.class).populate('classTeacher', '_id firstName lastName');
+    
+    if (!classObj || !classObj.classTeacher) {
+      console.log('No class teacher found for leave notification');
+      return;
+    }
+    
+    const fromDate = new Date(leave.fromDate).toLocaleDateString('en-IN');
+    const toDate = new Date(leave.toDate).toLocaleDateString('en-IN');
+    const dateRange = fromDate === toDate ? fromDate : `${fromDate} to ${toDate}`;
+    
+    // Calculate number of days
+    const daysDiff = Math.ceil((new Date(leave.toDate) - new Date(leave.fromDate)) / (1000 * 60 * 60 * 24)) + 1;
+    const daysText = daysDiff === 1 ? '1 day' : `${daysDiff} days`;
+    
+    // Create notification record
+    const notification = await Notification.create({
+      tenant: leave.tenant,
+      title: `Leave Application: ${student.firstName} ${student.lastName}`,
+      message: `${parent.firstName} ${parent.lastName} has applied for ${daysText} leave for their child ${student.firstName} (${dateRange}). Reason: ${leave.reason}`,
+      sender: parent._id,
+      type: 'leave',
+      priority: 'medium',
+      targetType: NOTIFICATION_TARGET.SPECIFIC_USER,
+      targetUsers: [classObj.classTeacher._id],
+      // Additional data for frontend navigation
+      metadata: {
+        leaveType: 'leave_application',
+        leaveId: leave._id,
+        studentId: student._id,
+        classId: classObj._id,
+        fromDate: leave.fromDate,
+        toDate: leave.toDate,
+        dayCount: daysDiff,
+        leaveCategory: leave.type,
+        navigateTo: 'pending_leaves'
+      }
+    });
+    
+    // Send FCM to class teacher
+    await sendFCMNotification([classObj.classTeacher._id], notification);
+    
+    console.log(`✅ Leave notification sent to class teacher: ${classObj.classTeacher.firstName} ${classObj.classTeacher.lastName}`);
+    
+  } catch (error) {
+    console.error('❌ Error sending leave notification:', error);
+    // Don't throw error to avoid breaking leave application
+  }
+};
+
 // @desc    Apply leave for child
 // @route   POST /api/parent/leave/apply
 // @access  Private/Parent
@@ -307,9 +364,13 @@ const applyLeave = async (req, res) => {
     
     await leave.populate('student', 'firstName lastName class');
     
+    // 🔥 AUTO-NOTIFICATION: Send notification to class teacher when leave is applied
+    await sendLeaveNotificationToTeacher(leave, student, req.user);
+    
     res.status(201).json({
       success: true,
-      data: leave
+      data: leave,
+      message: 'Leave application submitted and teacher notified successfully'
     });
   } catch (error) {
     res.status(400).json({

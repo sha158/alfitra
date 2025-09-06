@@ -4,6 +4,8 @@ const Student = require('../models/Student');
 const Class = require('../models/Class');
 const { FeeAssignment, FeePayment } = require('../models/Fee');
 const Leave = require('../models/Leave');
+const TeacherAttendance = require('../models/TeacherAttendance');
+const Activity = require('../models/Activity');
 const { generateRandomPassword } = require('../utils/passwordUtils');
 const mongoose = require('mongoose');
 const { autoAssignClassFees } = require('./feeController');
@@ -861,17 +863,27 @@ const createStudent = async (req, res) => {
       });
     }
     
+    // Validate classId is a valid ObjectId
+    if (!mongoose.Types.ObjectId.isValid(classId)) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid class ID format'
+      });
+    }
+
     // Check if class exists and has capacity
     const classObj = await Class.findOne({
       _id: classId,
-      tenant: req.user.tenant._id
+      tenant: req.user.tenant._id,
+      isActive: true
     }).session(session);
     
     if (!classObj) {
       await session.abortTransaction();
       return res.status(404).json({
         success: false,
-        message: 'Class not found'
+        message: 'Class not found or inactive'
       });
     }
     
@@ -1410,6 +1422,454 @@ async function getTodayAttendanceSummary(tenantId) {
   return summary;
 }
 
+// @desc    Mark teacher attendance for current or past date
+// @route   POST /api/admin/teacher-attendance
+// @access  Private/Admin
+const markTeacherAttendance = async (req, res) => {
+  try {
+    const { teacherId, date, status, remarks, checkInTime, checkOutTime, lateBy } = req.body;
+    
+    // Validate required fields
+    if (!teacherId || !date || !status) {
+      return res.status(400).json({
+        success: false,
+        message: 'Teacher ID, date, and status are required'
+      });
+    }
+    
+    // Verify teacher exists and belongs to the same tenant
+    const teacher = await User.findOne({
+      _id: teacherId,
+      tenant: req.user.tenant._id,
+      role: 'teacher',
+      isActive: true
+    });
+    
+    if (!teacher) {
+      return res.status(404).json({
+        success: false,
+        message: 'Teacher not found'
+      });
+    }
+    
+    // Convert date to start of day for consistent comparison
+    const attendanceDate = new Date(date);
+    attendanceDate.setHours(0, 0, 0, 0);
+    
+    // Check if attendance already exists for this teacher and date
+    const existingAttendance = await TeacherAttendance.findOne({
+      tenant: req.user.tenant._id,
+      teacher: teacherId,
+      date: attendanceDate
+    });
+    
+    if (existingAttendance) {
+      // Update existing attendance
+      existingAttendance.status = status;
+      existingAttendance.remarks = remarks || existingAttendance.remarks;
+      existingAttendance.checkInTime = checkInTime ? new Date(checkInTime) : existingAttendance.checkInTime;
+      existingAttendance.checkOutTime = checkOutTime ? new Date(checkOutTime) : existingAttendance.checkOutTime;
+      existingAttendance.lateBy = lateBy || existingAttendance.lateBy;
+      existingAttendance.markedBy = req.user._id;
+      
+      await existingAttendance.save();
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Teacher attendance updated successfully',
+        data: existingAttendance
+      });
+    }
+    
+    // Create new attendance record
+    const attendance = await TeacherAttendance.create({
+      tenant: req.user.tenant._id,
+      teacher: teacherId,
+      date: attendanceDate,
+      status,
+      markedBy: req.user._id,
+      remarks,
+      checkInTime: checkInTime ? new Date(checkInTime) : null,
+      checkOutTime: checkOutTime ? new Date(checkOutTime) : null,
+      lateBy: lateBy || null
+    });
+    
+    res.status(201).json({
+      success: true,
+      message: 'Teacher attendance marked successfully',
+      data: attendance
+    });
+    
+  } catch (error) {
+    console.error('Error marking teacher attendance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error marking teacher attendance',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get teacher attendance for a specific date or date range
+// @route   GET /api/admin/teacher-attendance
+// @access  Private/Admin
+const getTeacherAttendance = async (req, res) => {
+  try {
+    const { date, startDate, endDate, teacherId, month, year } = req.query;
+    
+    let filter = { tenant: req.user.tenant._id };
+    
+    // Add teacher filter if specified
+    if (teacherId) {
+      filter.teacher = teacherId;
+    }
+    
+    // Handle different date query scenarios
+    if (date) {
+      // Single date
+      const queryDate = new Date(date);
+      queryDate.setHours(0, 0, 0, 0);
+      const nextDay = new Date(queryDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+      
+      filter.date = { $gte: queryDate, $lt: nextDay };
+    } else if (startDate && endDate) {
+      // Date range
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      
+      filter.date = { $gte: start, $lte: end };
+    } else if (month && year) {
+      // Specific month and year
+      const startOfMonth = new Date(year, month - 1, 1);
+      const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+      
+      filter.date = { $gte: startOfMonth, $lte: endOfMonth };
+    } else {
+      // Default to current month if no date parameters provided
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+      
+      filter.date = { $gte: startOfMonth, $lte: endOfMonth };
+    }
+    
+    const attendance = await TeacherAttendance.find(filter)
+      .populate('teacher', 'firstName lastName email teacherInfo.employeeId')
+      .populate('markedBy', 'firstName lastName')
+      .sort({ date: -1, 'teacher.firstName': 1 });
+    
+    res.status(200).json({
+      success: true,
+      count: attendance.length,
+      data: attendance
+    });
+    
+  } catch (error) {
+    console.error('Error fetching teacher attendance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching teacher attendance',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get teacher attendance summary
+// @route   GET /api/admin/teacher-attendance/summary/:teacherId
+// @access  Private/Admin
+const getTeacherAttendanceSummary = async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const { startDate, endDate, month, year } = req.query;
+    
+    // Verify teacher exists and belongs to the same tenant
+    const teacher = await User.findOne({
+      _id: teacherId,
+      tenant: req.user.tenant._id,
+      role: 'teacher',
+      isActive: true
+    }).select('firstName lastName email teacherInfo.employeeId');
+    
+    if (!teacher) {
+      return res.status(404).json({
+        success: false,
+        message: 'Teacher not found'
+      });
+    }
+    
+    let start, end;
+    
+    if (startDate && endDate) {
+      start = new Date(startDate);
+      end = new Date(endDate);
+    } else if (month && year) {
+      start = new Date(year, month - 1, 1);
+      end = new Date(year, month, 0);
+    } else {
+      // Default to current month
+      const now = new Date();
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    }
+    
+    const summary = await TeacherAttendance.getAttendanceSummary(teacherId, start, end);
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        teacher: {
+          _id: teacher._id,
+          name: `${teacher.firstName} ${teacher.lastName}`,
+          email: teacher.email,
+          employeeId: teacher.teacherInfo?.employeeId
+        },
+        period: {
+          startDate: start,
+          endDate: end
+        },
+        summary
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error fetching teacher attendance summary:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching teacher attendance summary',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get monthly attendance report for all teachers
+// @route   GET /api/admin/teacher-attendance/monthly-report
+// @access  Private/Admin
+const getMonthlyAttendanceReport = async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    
+    // Default to current month if not specified
+    const now = new Date();
+    const reportMonth = month ? parseInt(month) : now.getMonth() + 1;
+    const reportYear = year ? parseInt(year) : now.getFullYear();
+    
+    const report = await TeacherAttendance.getMonthlyReport(req.user.tenant._id, reportYear, reportMonth);
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        period: {
+          month: reportMonth,
+          year: reportYear,
+          monthName: new Date(reportYear, reportMonth - 1).toLocaleString('default', { month: 'long' })
+        },
+        teachers: report
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error generating monthly attendance report:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generating monthly attendance report',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Mark attendance for multiple teachers (bulk operation)
+// @route   POST /api/admin/teacher-attendance/bulk
+// @access  Private/Admin
+const bulkMarkTeacherAttendance = async (req, res) => {
+  try {
+    const { date, attendanceData } = req.body;
+    
+    // Validate required fields
+    if (!date || !attendanceData || !Array.isArray(attendanceData)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Date and attendance data array are required'
+      });
+    }
+    
+    // Convert date to start of day for consistent comparison
+    const attendanceDate = new Date(date);
+    attendanceDate.setHours(0, 0, 0, 0);
+    
+    const results = [];
+    const errors = [];
+    
+    // Process each teacher's attendance
+    for (const data of attendanceData) {
+      try {
+        const { teacherId, status, remarks, checkInTime, checkOutTime, lateBy } = data;
+        
+        if (!teacherId || !status) {
+          errors.push({ teacherId, error: 'Teacher ID and status are required' });
+          continue;
+        }
+        
+        // Verify teacher exists and belongs to the same tenant
+        const teacher = await User.findOne({
+          _id: teacherId,
+          tenant: req.user.tenant._id,
+          role: 'teacher',
+          isActive: true
+        });
+        
+        if (!teacher) {
+          errors.push({ teacherId, error: 'Teacher not found' });
+          continue;
+        }
+        
+        // Check if attendance already exists
+        const existingAttendance = await TeacherAttendance.findOne({
+          tenant: req.user.tenant._id,
+          teacher: teacherId,
+          date: attendanceDate
+        });
+        
+        if (existingAttendance) {
+          // Update existing attendance
+          existingAttendance.status = status;
+          existingAttendance.remarks = remarks || existingAttendance.remarks;
+          existingAttendance.checkInTime = checkInTime ? new Date(checkInTime) : existingAttendance.checkInTime;
+          existingAttendance.checkOutTime = checkOutTime ? new Date(checkOutTime) : existingAttendance.checkOutTime;
+          existingAttendance.lateBy = lateBy || existingAttendance.lateBy;
+          existingAttendance.markedBy = req.user._id;
+          
+          await existingAttendance.save();
+          results.push({ teacherId, action: 'updated', attendance: existingAttendance });
+        } else {
+          // Create new attendance record
+          const attendance = await TeacherAttendance.create({
+            tenant: req.user.tenant._id,
+            teacher: teacherId,
+            date: attendanceDate,
+            status,
+            markedBy: req.user._id,
+            remarks,
+            checkInTime: checkInTime ? new Date(checkInTime) : null,
+            checkOutTime: checkOutTime ? new Date(checkOutTime) : null,
+            lateBy: lateBy || null
+          });
+          
+          results.push({ teacherId, action: 'created', attendance });
+        }
+      } catch (error) {
+        errors.push({ teacherId: data.teacherId, error: error.message });
+      }
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `Processed ${results.length} teacher attendance records`,
+      data: {
+        successful: results,
+        failed: errors,
+        summary: {
+          total: attendanceData.length,
+          successful: results.length,
+          failed: errors.length
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error in bulk teacher attendance marking:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error in bulk teacher attendance marking',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get recent activities for admin dashboard
+// @route   GET /api/admin/recent-activities
+// @access  Private/Admin
+const getRecentActivities = async (req, res) => {
+  try {
+    const {
+      limit = 50,
+      page = 1,
+      type,
+      teacherId,
+      classId,
+      startDate,
+      endDate
+    } = req.query;
+
+    const skip = (page - 1) * limit;
+    
+    const options = {
+      limit: parseInt(limit),
+      skip: skip,
+      type: type || null,
+      teacherId: teacherId || null,
+      classId: classId || null,
+      startDate: startDate || null,
+      endDate: endDate || null
+    };
+
+    const activities = await Activity.getRecentActivities(req.user.tenant._id, options);
+    
+    // Get total count for pagination
+    const query = { tenant: req.user.tenant._id };
+    if (type) query.type = type;
+    if (teacherId) query.teacher = teacherId;
+    if (classId) query.class = classId;
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+    
+    const totalActivities = await Activity.countDocuments(query);
+    
+    // Group activities by type for summary
+    const activitySummary = await Activity.aggregate([
+      { $match: { tenant: new mongoose.Types.ObjectId(req.user.tenant._id) } },
+      {
+        $group: {
+          _id: '$type',
+          count: { $sum: 1 },
+          lastActivity: { $max: '$createdAt' }
+        }
+      },
+      { $sort: { count: -1 } }
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        activities,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalActivities / limit),
+          totalActivities,
+          hasNextPage: skip + activities.length < totalActivities,
+          hasPrevPage: page > 1
+        },
+        summary: {
+          totalActivities,
+          activityBreakdown: activitySummary
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching recent activities:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching recent activities',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createTeacher,
   getTeachers,
@@ -1425,5 +1885,11 @@ module.exports = {
   deleteClass,
   resetUserPassword,
   getDashboardData,
-  getAvailableTeachers
+  getAvailableTeachers,
+  markTeacherAttendance,
+  getTeacherAttendance,
+  getTeacherAttendanceSummary,
+  getMonthlyAttendanceReport,
+  bulkMarkTeacherAttendance,
+  getRecentActivities
 };

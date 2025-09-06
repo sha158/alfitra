@@ -41,7 +41,18 @@ const sendFCMNotification = async (targetUserIds, notification) => {
         type: notification.type || 'general',
         priority: notification.priority || 'medium',
         notificationId: notification._id.toString(),
-        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+        click_action: 'FLUTTER_NOTIFICATION_CLICK',
+        // Include metadata for frontend navigation
+        ...(notification.metadata && {
+          attendanceType: notification.metadata.attendanceType || '',
+          studentId: notification.metadata.studentId?.toString() || '',
+          classId: notification.metadata.classId?.toString() || '',
+          date: notification.metadata.date || '',
+          navigateTo: notification.metadata.navigateTo || '',
+          presentCount: notification.metadata.presentCount?.toString() || '',
+          absentCount: notification.metadata.absentCount?.toString() || '',
+          totalStudents: notification.metadata.totalStudents?.toString() || ''
+        })
       },
       android: {
         priority: notification.priority === 'urgent' || notification.priority === 'high' ? 'high' : 'normal',
@@ -125,7 +136,18 @@ const sendFCMToTopic = async (topic, notification) => {
         type: notification.type || 'general',
         priority: notification.priority || 'medium',
         notificationId: notification._id.toString(),
-        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+        click_action: 'FLUTTER_NOTIFICATION_CLICK',
+        // Include metadata for frontend navigation
+        ...(notification.metadata && {
+          attendanceType: notification.metadata.attendanceType || '',
+          studentId: notification.metadata.studentId?.toString() || '',
+          classId: notification.metadata.classId?.toString() || '',
+          date: notification.metadata.date || '',
+          navigateTo: notification.metadata.navigateTo || '',
+          presentCount: notification.metadata.presentCount?.toString() || '',
+          absentCount: notification.metadata.absentCount?.toString() || '',
+          totalStudents: notification.metadata.totalStudents?.toString() || ''
+        })
       },
       android: {
         priority: notification.priority === 'urgent' || notification.priority === 'high' ? 'high' : 'normal',
@@ -653,5 +675,8 @@ module.exports = {
   createAnnouncement,
   getAnnouncements,
   updateAnnouncement,
-  deleteAnnouncement
+  deleteAnnouncement,
+  // FCM Helper functions (for internal use by other controllers)
+  sendFCMNotification,
+  sendFCMToTopic
 };

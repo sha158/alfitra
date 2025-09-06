@@ -3,6 +3,7 @@ const { FeeStructure, FeeAssignment, FeePayment } = require('../models/Fee');
 const Student = require('../models/Student');
 const Class = require('../models/Class');
 const { FEE_STATUS } = require('../config/constants');
+const activityLogger = require('../utils/activityLogger');
 
 // @desc    Create fee structure
 // @route   POST /api/admin/fees/structure
@@ -261,6 +262,22 @@ const recordFeePayment = async (req, res) => {
     await feeAssignment.save();
     
     await payment.populate('student');
+    await payment.populate({
+      path: 'feeAssignment',
+      populate: {
+        path: 'feeStructure',
+        select: 'name'
+      }
+    });
+    
+    // 📝 LOG ACTIVITY: Log payment received activity
+    await activityLogger.logPaymentReceived(
+      req.user, 
+      payment.student, 
+      payment.feeAssignment.feeStructure, 
+      amount, 
+      paymentMethod
+    );
     
     res.status(201).json({
       success: true,
@@ -280,13 +297,15 @@ const recordFeePayment = async (req, res) => {
 // @access  Private/Admin
 const getPayments = async (req, res) => {
   try {
-    const { startDate, endDate, studentId } = req.query;
+    const { startDate, endDate, studentId, paymentMethod } = req.query;
     
     const query = {
       tenant: req.user.tenant._id
     };
     
     if (studentId) query.student = studentId;
+    
+    if (paymentMethod) query.paymentMethod = paymentMethod;
     
     if (startDate || endDate) {
       query.paymentDate = {};

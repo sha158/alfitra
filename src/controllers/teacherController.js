@@ -4,9 +4,37 @@ const Note = require('../models/Note');
 const Class = require('../models/Class');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
-const { LEAVE_STATUS } = require('../config/constants');
+const { LEAVE_STATUS, NOTIFICATION_TARGET } = require('../config/constants');
+const { Notification } = require('../models/Notification');
+const { sendFCMToTopic, sendFCMNotification } = require('./notificationController');
+const activityLogger = require('../utils/activityLogger');
 
 // ============ HOMEWORK MANAGEMENT ============
+
+// Helper function to send homework notifications to parents
+const sendHomeworkNotification = async (homework, teacher) => {
+  try {
+    // Create notification record
+    const notification = await Notification.create({
+      tenant: homework.tenant,
+      title: `New Homework: ${homework.title}`,
+      message: `${teacher.firstName} ${teacher.lastName} assigned new homework for ${homework.subject}. Due: ${new Date(homework.dueDate).toLocaleDateString()}`,
+      sender: teacher._id,
+      type: 'homework',
+      priority: 'medium',
+      targetType: NOTIFICATION_TARGET.SPECIFIC_CLASS,
+      targetClass: homework.class._id
+    });
+    
+    // Send FCM to class topic (parents will be subscribed to this)
+    await sendFCMToTopic(`class_${homework.class._id}`, notification);
+    
+    console.log(`✅ Homework notification sent for class: ${homework.class.name}-${homework.class.section}`);
+  } catch (error) {
+    console.error('❌ Error sending homework notification:', error);
+    // Don't throw error to avoid breaking homework creation
+  }
+};
 
 // @desc    Create homework
 // @route   POST /api/teacher/homework
@@ -21,9 +49,16 @@ const createHomework = async (req, res) => {
     
     await homework.populate('class', 'name section');
     
+    // 🔥 AUTO-NOTIFICATION: Send notification to parents when homework is created
+    await sendHomeworkNotification(homework, req.user);
+    
+    // 📝 LOG ACTIVITY: Log homework creation activity
+    await activityLogger.logHomeworkCreated(req.user, homework);
+    
     res.status(201).json({
       success: true,
-      data: homework
+      data: homework,
+      message: 'Homework created and parents notified successfully'
     });
   } catch (error) {
     res.status(400).json({
@@ -99,6 +134,9 @@ const updateHomework = async (req, res) => {
       });
     }
     
+    // 📝 LOG ACTIVITY: Log homework update activity
+    await activityLogger.logHomeworkUpdated(req.user, homework);
+    
     res.status(200).json({
       success: true,
       data: homework
@@ -117,6 +155,20 @@ const updateHomework = async (req, res) => {
 // @access  Private/Teacher
 const deleteHomework = async (req, res) => {
   try {
+    // Get homework data before deleting for logging
+    const homeworkToDelete = await Homework.findOne({
+      _id: req.params.id,
+      tenant: req.user.tenant._id,
+      teacher: req.user._id
+    }).populate('class', 'name section');
+
+    if (!homeworkToDelete) {
+      return res.status(404).json({
+        success: false,
+        message: 'Homework not found'
+      });
+    }
+
     const homework = await Homework.findOneAndUpdate(
       {
         _id: req.params.id,
@@ -127,12 +179,8 @@ const deleteHomework = async (req, res) => {
       { new: true }
     );
     
-    if (!homework) {
-      return res.status(404).json({
-        success: false,
-        message: 'Homework not found'
-      });
-    }
+    // 📝 LOG ACTIVITY: Log homework deletion activity
+    await activityLogger.logHomeworkDeleted(req.user, homeworkToDelete);
     
     res.status(200).json({
       success: true,
@@ -149,6 +197,31 @@ const deleteHomework = async (req, res) => {
 
 // ============ NOTES MANAGEMENT ============
 
+// Helper function to send notes notifications to parents
+const sendNotesNotification = async (note, teacher) => {
+  try {
+    // Create notification record
+    const notification = await Notification.create({
+      tenant: note.tenant,
+      title: `New Study Material: ${note.title}`,
+      message: `${teacher.firstName} ${teacher.lastName} uploaded new study material for ${note.subject}`,
+      sender: teacher._id,
+      type: 'general',
+      priority: 'medium',
+      targetType: NOTIFICATION_TARGET.SPECIFIC_CLASS,
+      targetClass: note.class._id
+    });
+    
+    // Send FCM to class topic (parents will be subscribed to this)
+    await sendFCMToTopic(`class_${note.class._id}`, notification);
+    
+    console.log(`✅ Notes notification sent for class: ${note.class.name}-${note.class.section}`);
+  } catch (error) {
+    console.error('❌ Error sending notes notification:', error);
+    // Don't throw error to avoid breaking notes creation
+  }
+};
+
 // @desc    Upload notes/study material
 // @route   POST /api/teacher/notes
 // @access  Private/Teacher
@@ -162,9 +235,16 @@ const uploadNotes = async (req, res) => {
     
     await note.populate('class', 'name section');
     
+    // 🔥 AUTO-NOTIFICATION: Send notification to parents when notes are uploaded
+    await sendNotesNotification(note, req.user);
+    
+    // 📝 LOG ACTIVITY: Log notes upload activity
+    await activityLogger.logNotesUploaded(req.user, note);
+    
     res.status(201).json({
       success: true,
-      data: note
+      data: note,
+      message: 'Notes uploaded and parents notified successfully'
     });
   } catch (error) {
     res.status(400).json({
@@ -234,6 +314,9 @@ const updateNote = async (req, res) => {
       });
     }
     
+    // 📝 LOG ACTIVITY: Log notes update activity
+    await activityLogger.logNotesUpdated(req.user, note);
+    
     res.status(200).json({
       success: true,
       data: note
@@ -252,18 +335,28 @@ const updateNote = async (req, res) => {
 // @access  Private/Teacher
 const deleteNote = async (req, res) => {
   try {
+    // Get note data before deleting for logging
+    const noteToDelete = await Note.findOne({
+      _id: req.params.id,
+      tenant: req.user.tenant._id,
+      teacher: req.user._id
+    }).populate('class', 'name section');
+
+    if (!noteToDelete) {
+      return res.status(404).json({
+        success: false,
+        message: 'Note not found'
+      });
+    }
+
     const note = await Note.findOneAndDelete({
       _id: req.params.id,
       tenant: req.user.tenant._id,
       teacher: req.user._id
     });
     
-    if (!note) {
-      return res.status(404).json({
-        success: false,
-        message: 'Note not found'
-      });
-    }
+    // 📝 LOG ACTIVITY: Log notes deletion activity
+    await activityLogger.logNotesDeleted(req.user, noteToDelete);
     
     res.status(200).json({
       success: true,
@@ -279,6 +372,97 @@ const deleteNote = async (req, res) => {
 };
 
 // ============ ATTENDANCE MANAGEMENT ============
+
+// Helper function to send attendance notifications to parents
+const sendAttendanceNotification = async (classObj, date, attendanceRecords, teacher, isUpdate = false) => {
+  try {
+    const Student = require('../models/Student');
+    
+    // Get students who were marked absent
+    const absentStudentIds = attendanceRecords
+      .filter(record => record.status === 'absent')
+      .map(record => record.student);
+    
+    if (absentStudentIds.length === 0) {
+      console.log('No absent students, skipping attendance notification');
+      return;
+    }
+    
+    // Get student details with parent information
+    const absentStudents = await Student.find({
+      _id: { $in: absentStudentIds },
+      tenant: teacher.tenant._id
+    }).populate('parent', '_id firstName lastName');
+    
+    const formattedDate = new Date(date).toLocaleDateString('en-IN');
+    const actionText = isUpdate ? 'updated' : 'marked';
+    
+    // Send individual notifications to each parent
+    for (const student of absentStudents) {
+      if (student.parent) {
+        // Create notification record
+        const notification = await Notification.create({
+          tenant: teacher.tenant._id,
+          title: `Attendance Alert: ${student.firstName} ${student.lastName}`,
+          message: `${teacher.firstName} ${teacher.lastName} has ${actionText} your child ${student.firstName} as absent on ${formattedDate}. Please contact the school if this is incorrect.`,
+          sender: teacher._id,
+          type: 'attendance',
+          priority: 'high',
+          targetType: NOTIFICATION_TARGET.SPECIFIC_USER,
+          targetUsers: [student.parent._id],
+          // Additional data for frontend navigation
+          metadata: {
+            attendanceType: 'individual_absence',
+            studentId: student._id,
+            classId: classObj._id,
+            date: date,
+            navigateTo: 'attendance_details'
+          }
+        });
+        
+        // Send FCM to specific parent
+        await sendFCMNotification([student.parent._id], notification);
+        
+        console.log(`✅ Attendance notification sent to parent of ${student.firstName} ${student.lastName}`);
+      }
+    }
+    
+    // Also send a general notification to the class topic for attendance summary
+    const totalStudents = attendanceRecords.length;
+    const presentCount = attendanceRecords.filter(r => r.status === 'present').length;
+    const absentCount = absentStudentIds.length;
+    
+    const summaryNotification = await Notification.create({
+      tenant: teacher.tenant._id,
+      title: `Daily Attendance - ${classObj.name}-${classObj.section}`,
+      message: `Attendance ${actionText} for ${formattedDate}. Present: ${presentCount}, Absent: ${absentCount}, Total: ${totalStudents}`,
+      sender: teacher._id,
+      type: 'attendance',
+      priority: 'medium',
+      targetType: NOTIFICATION_TARGET.SPECIFIC_CLASS,
+      targetClass: classObj._id,
+      // Additional data for frontend navigation
+      metadata: {
+        attendanceType: 'class_summary',
+        classId: classObj._id,
+        date: date,
+        presentCount: presentCount,
+        absentCount: absentCount,
+        totalStudents: totalStudents,
+        navigateTo: 'class_attendance'
+      }
+    });
+    
+    // Send FCM to class topic (all parents in the class)
+    await sendFCMToTopic(`class_${classObj._id}`, summaryNotification);
+    
+    console.log(`✅ Attendance summary notification sent for class: ${classObj.name}-${classObj.section}`);
+    
+  } catch (error) {
+    console.error('❌ Error sending attendance notification:', error);
+    // Don't throw error to avoid breaking attendance marking
+  }
+};
 
 // @desc    Mark attendance
 // @route   POST /api/teacher/attendance
@@ -304,10 +488,23 @@ const markAttendance = async (req, res) => {
       });
     }
     
-    // Process attendance for each student
+    // Track if this is an update (existing records) or new submission
+    let isUpdate = false;
     const attendanceRecords = [];
     
+    // Process attendance for each student
     for (const record of attendanceData) {
+      // Check if attendance already exists for this student and date
+      const existingAttendance = await Attendance.findOne({
+        tenant: req.user.tenant._id,
+        student: record.studentId,
+        date: new Date(date)
+      });
+      
+      if (existingAttendance) {
+        isUpdate = true;
+      }
+      
       const attendance = await Attendance.findOneAndUpdate(
         {
           tenant: req.user.tenant._id,
@@ -329,10 +526,19 @@ const markAttendance = async (req, res) => {
       attendanceRecords.push(attendance);
     }
     
+    // 🔥 AUTO-NOTIFICATION: Send notification to parents when attendance is marked/updated
+    await sendAttendanceNotification(classObj, date, attendanceRecords, req.user, isUpdate);
+    
+    // 📝 LOG ACTIVITY: Log attendance marking activity
+    await activityLogger.logAttendanceMarked(req.user, classObj, date, attendanceRecords, isUpdate);
+    
+    const actionText = isUpdate ? 'updated' : 'marked';
+    
     res.status(200).json({
       success: true,
       count: attendanceRecords.length,
-      data: attendanceRecords
+      data: attendanceRecords,
+      message: `Attendance ${actionText} and parents notified successfully`
     });
   } catch (error) {
     res.status(400).json({
@@ -537,6 +743,67 @@ const getRejectedLeaves = async (req, res) => {
   }
 };
 
+// Helper function to send leave status notification to parent
+const sendLeaveStatusNotificationToParent = async (leave, teacher, status, remarks) => {
+  try {
+    const fromDate = new Date(leave.fromDate).toLocaleDateString('en-IN');
+    const toDate = new Date(leave.toDate).toLocaleDateString('en-IN');
+    const dateRange = fromDate === toDate ? fromDate : `${fromDate} to ${toDate}`;
+    
+    // Calculate number of days
+    const daysDiff = Math.ceil((new Date(leave.toDate) - new Date(leave.fromDate)) / (1000 * 60 * 60 * 24)) + 1;
+    const daysText = daysDiff === 1 ? '1 day' : `${daysDiff} days`;
+    
+    const isApproved = status === LEAVE_STATUS.APPROVED;
+    const statusText = isApproved ? 'approved' : 'rejected';
+    const statusIcon = isApproved ? '✅' : '❌';
+    
+    let title = `Leave ${statusText.charAt(0).toUpperCase() + statusText.slice(1)}: ${leave.student.firstName} ${leave.student.lastName}`;
+    let message = `${teacher.firstName} ${teacher.lastName} has ${statusText} your child's ${daysText} leave request (${dateRange}).`;
+    
+    if (remarks) {
+      message += ` Remarks: ${remarks}`;
+    }
+    
+    // Create notification record
+    const notification = await Notification.create({
+      tenant: leave.tenant,
+      title: title,
+      message: message,
+      sender: teacher._id,
+      type: 'leave',
+      priority: isApproved ? 'medium' : 'high', // Higher priority for rejections
+      targetType: NOTIFICATION_TARGET.SPECIFIC_USER,
+      targetUsers: [leave.appliedBy],
+      // Additional data for frontend navigation
+      metadata: {
+        leaveType: 'leave_status_update',
+        leaveId: leave._id,
+        studentId: leave.student._id,
+        classId: leave.student.class._id,
+        fromDate: leave.fromDate,
+        toDate: leave.toDate,
+        dayCount: daysDiff,
+        leaveCategory: leave.type,
+        status: status,
+        isApproved: isApproved,
+        statusIcon: statusIcon,
+        remarks: remarks || '',
+        navigateTo: isApproved ? 'approved_leaves' : 'rejected_leaves'
+      }
+    });
+    
+    // Send FCM to parent
+    await sendFCMNotification([leave.appliedBy], notification);
+    
+    console.log(`✅ Leave ${statusText} notification sent to parent for ${leave.student.firstName} ${leave.student.lastName}`);
+    
+  } catch (error) {
+    console.error('❌ Error sending leave status notification:', error);
+    // Don't throw error to avoid breaking leave status update
+  }
+};
+
 // @desc    Approve/Reject leave
 // @route   PUT /api/teacher/leaves/:id
 // @access  Private/Teacher
@@ -586,9 +853,18 @@ const updateLeaveStatus = async (req, res) => {
     
     await leave.populate('appliedBy', 'firstName lastName');
     
+    // 🔥 AUTO-NOTIFICATION: Send notification to parent when leave status is updated
+    await sendLeaveStatusNotificationToParent(leave, req.user, status, remarks);
+    
+    // 📝 LOG ACTIVITY: Log leave status update activity
+    await activityLogger.logLeaveStatusUpdate(req.user, leave, status, remarks);
+    
+    const statusText = status === LEAVE_STATUS.APPROVED ? 'approved' : 'rejected';
+    
     res.status(200).json({
       success: true,
-      data: leave
+      data: leave,
+      message: `Leave ${statusText} and parent notified successfully`
     });
   } catch (error) {
     res.status(400).json({
@@ -698,5 +974,7 @@ module.exports = {
   // Classes
   getTeacherClasses,
   // Students
-  getClassStudents
+  getClassStudents,
+  // Helper functions (for internal use)
+  sendAttendanceNotification
 };

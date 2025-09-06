@@ -3,6 +3,59 @@ const User = require('../models/User');
 const Tenant = require('../models/Tenant');
 const { sendTokenResponse } = require('../utils/tokenGenerator');
 const { validatePasswordStrength } = require('../utils/passwordUtils');
+const { admin } = require('../config/firebaseAdmin');
+
+// Helper function to subscribe user to FCM topics based on their role
+const subscribeUserToTopics = async (user) => {
+  if (!user.fcmTokens || user.fcmTokens.length === 0) {
+    console.log('No FCM tokens found for user, skipping topic subscription');
+    return;
+  }
+  
+  try {
+    const topics = ['all_users']; // All users get general notifications
+    
+    if (user.role === 'parent') {
+      topics.push('parents');
+      
+      // Get children's classes for parent to subscribe to class-specific notifications
+      const Student = require('../models/Student');
+      const children = await Student.find({
+        tenant: user.tenant._id || user.tenant,
+        parent: user._id,
+        isActive: true
+      }).populate('class');
+      
+      children.forEach(child => {
+        if (child.class) {
+          topics.push(`class_${child.class._id}`);
+        }
+      });
+    } else if (user.role === 'teacher') {
+      topics.push('teachers');
+    } else if (user.role === 'admin') {
+      topics.push('admins');
+    }
+    
+    // Subscribe all user's FCM tokens to the relevant topics
+    for (const tokenObj of user.fcmTokens) {
+      if (tokenObj.token && tokenObj.token.length > 0) {
+        for (const topic of topics) {
+          try {
+            await admin.messaging().subscribeToTopic(tokenObj.token, topic);
+          } catch (topicError) {
+            console.error(`Error subscribing token to topic ${topic}:`, topicError.message);
+          }
+        }
+      }
+    }
+    
+    console.log(`✅ User ${user._id} (${user.role}) subscribed to topics:`, topics);
+  } catch (error) {
+    console.error('❌ Error subscribing to topics:', error);
+    // Don't throw error to avoid breaking the main flow
+  }
+};
 
 // @desc    Register a new tenant with admin user
 // @route   POST /api/auth/register-tenant
@@ -257,9 +310,12 @@ const updateFCMToken = async (req, res) => {
     // Update user's FCM token
     await req.user.updateFCMToken(token, platform);
     
+    // 🔥 AUTO-SUBSCRIBE: Subscribe user to relevant FCM topics
+    await subscribeUserToTopics(req.user);
+    
     res.status(200).json({
       success: true,
-      message: 'FCM token updated successfully'
+      message: 'FCM token updated and subscribed to topics successfully'
     });
   } catch (error) {
     res.status(400).json({

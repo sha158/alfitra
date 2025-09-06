@@ -34,7 +34,13 @@ const {
   deleteStudent,
   resetUserPassword,
   getDashboardData,
-  getAvailableTeachers
+  getAvailableTeachers,
+  markTeacherAttendance,
+  getTeacherAttendance,
+  getTeacherAttendanceSummary,
+  getMonthlyAttendanceReport,
+  bulkMarkTeacherAttendance,
+  getRecentActivities
 } = require('../controllers/adminController');
 const {
   createFeeStructure,
@@ -57,6 +63,13 @@ const {
   deleteAnnouncement,
   getNotificationStats
 } = require('../controllers/notificationController');
+const {
+  createSubject,
+  getSubjects,
+  updateSubject,
+  deleteSubject,
+  getSubjectsDropdown
+} = require('../controllers/subjectController');
 const { protect } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/rolecheck');
 const { ensureTenant } = require('../middleware/tenantCheck');
@@ -68,6 +81,9 @@ router.use(ensureTenant);
 
 // Dashboard
 router.get('/dashboard', getDashboardData);
+
+// Recent activities
+router.get('/recent-activities', getRecentActivities);
 
 // Teacher routes
 router.route('/teachers')
@@ -400,5 +416,26 @@ router.get('/fees/debug-year', async (req, res) => {
       'Month is before April, so academic year is previous-current'
   });
 });
+
+// Subject routes
+router.get('/subjects/dropdown', getSubjectsDropdown);
+router.route('/subjects')
+  .get(getSubjects)
+  .post(createSubject);
+
+router.route('/subjects/:id')
+  .put(updateSubject)
+  .delete(deleteSubject);
+
+// Teacher attendance routes
+router.route('/teacher-attendance')
+  .get(getTeacherAttendance)      // Get teacher attendance (with optional filters)
+  .post(markTeacherAttendance);   // Mark single teacher attendance
+
+router.post('/teacher-attendance/bulk', bulkMarkTeacherAttendance); // Bulk mark attendance
+
+router.get('/teacher-attendance/summary/:teacherId', getTeacherAttendanceSummary); // Get summary for specific teacher
+
+router.get('/teacher-attendance/monthly-report', getMonthlyAttendanceReport); // Get monthly report for all teachers
 
 module.exports = router;

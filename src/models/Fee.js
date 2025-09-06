@@ -18,8 +18,7 @@ const feeStructureSchema = new mongoose.Schema({
   
   category: {
     type: mongoose.Schema.Types.ObjectId,  // Changed to ObjectId
-    ref: 'FeeCategory',
-    required: [true, 'Category is required']
+    ref: 'FeeCategory'
   },
   
   classes: [{
@@ -35,8 +34,7 @@ const feeStructureSchema = new mongoose.Schema({
   
   frequency: {
     type: mongoose.Schema.Types.ObjectId,  // Changed to ObjectId
-    ref: 'FeeFrequency',
-    required: [true, 'Frequency is required']
+    ref: 'FeeFrequency'
   },
   
   academicYear: {
