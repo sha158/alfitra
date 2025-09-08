@@ -1518,6 +1518,7 @@ const getTeacherAttendance = async (req, res) => {
     const { date, startDate, endDate, teacherId, month, year } = req.query;
     
     let filter = { tenant: req.user.tenant._id };
+    let queryDate = null;
     
     // Add teacher filter if specified
     if (teacherId) {
@@ -1527,7 +1528,7 @@ const getTeacherAttendance = async (req, res) => {
     // Handle different date query scenarios
     if (date) {
       // Single date
-      const queryDate = new Date(date);
+      queryDate = new Date(date);
       queryDate.setHours(0, 0, 0, 0);
       const nextDay = new Date(queryDate);
       nextDay.setDate(nextDay.getDate() + 1);
@@ -1561,11 +1562,55 @@ const getTeacherAttendance = async (req, res) => {
       .populate('markedBy', 'firstName lastName')
       .sort({ date: -1, 'teacher.firstName': 1 });
     
-    res.status(200).json({
+    // Enhanced response with submission metadata for single date queries
+    let responseData = {
       success: true,
       count: attendance.length,
       data: attendance
-    });
+    };
+    
+    // If querying for a specific single date, add submission metadata
+    if (date && queryDate) {
+      // Get total number of active teachers for this tenant
+      const totalTeachers = await User.countDocuments({
+        tenant: req.user.tenant._id,
+        role: 'teacher',
+        isActive: true
+      });
+      
+      // Check if attendance has been bulk submitted (all teachers have records for this date)
+      const attendanceForDate = attendance.filter(att => {
+        const attDate = new Date(att.date);
+        attDate.setHours(0, 0, 0, 0);
+        return attDate.getTime() === queryDate.getTime();
+      });
+      
+      const isSubmitted = attendanceForDate.length > 0 && attendanceForDate.length === totalTeachers;
+      
+      // Find the admin who submitted (assuming bulk submission by same admin)
+      let submittedBy = null;
+      if (isSubmitted && attendanceForDate.length > 0) {
+        // Get the first admin who marked attendance (assuming bulk submission)
+        const firstRecord = attendanceForDate.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+        submittedBy = {
+          id: firstRecord.markedBy._id,
+          name: `${firstRecord.markedBy.firstName} ${firstRecord.markedBy.lastName}`,
+          submittedAt: firstRecord.createdAt
+        };
+      }
+      
+      responseData = {
+        success: true,
+        date: queryDate.toISOString().split('T')[0],
+        isSubmitted: isSubmitted,
+        submittedBy: submittedBy,
+        count: attendance.length,
+        totalTeachers: totalTeachers,
+        data: attendance
+      };
+    }
+    
+    res.status(200).json(responseData);
     
   } catch (error) {
     console.error('Error fetching teacher attendance:', error);
