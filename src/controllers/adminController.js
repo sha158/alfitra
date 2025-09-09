@@ -1515,10 +1515,11 @@ const markTeacherAttendance = async (req, res) => {
 // @access  Private/Admin
 const getTeacherAttendance = async (req, res) => {
   try {
-    const { date, startDate, endDate, teacherId, month, year } = req.query;
+    const { date, startDate, endDate, teacherId, month, year, calendarView } = req.query;
     
     let filter = { tenant: req.user.tenant._id };
     let queryDate = null;
+    let dateRange = null;
     
     // Add teacher filter if specified
     if (teacherId) {
@@ -1535,18 +1536,31 @@ const getTeacherAttendance = async (req, res) => {
       
       filter.date = { $gte: queryDate, $lt: nextDay };
     } else if (startDate && endDate) {
-      // Date range
+      // Date range with 31-day limit validation
       const start = new Date(startDate);
       start.setHours(0, 0, 0, 0);
       const end = new Date(endDate);
       end.setHours(23, 59, 59, 999);
       
+      // Validate date range (max 31 days)
+      const daysDifference = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+      if (daysDifference > 31) {
+        return res.status(400).json({
+          success: false,
+          message: 'Date range cannot exceed 31 days',
+          maxDays: 31,
+          requestedDays: daysDifference
+        });
+      }
+      
+      dateRange = { start, end };
       filter.date = { $gte: start, $lte: end };
     } else if (month && year) {
       // Specific month and year
       const startOfMonth = new Date(year, month - 1, 1);
       const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
       
+      dateRange = { start: startOfMonth, end: endOfMonth };
       filter.date = { $gte: startOfMonth, $lte: endOfMonth };
     } else {
       // Default to current month if no date parameters provided
@@ -1554,6 +1568,7 @@ const getTeacherAttendance = async (req, res) => {
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
       
+      dateRange = { start: startOfMonth, end: endOfMonth };
       filter.date = { $gte: startOfMonth, $lte: endOfMonth };
     }
     
@@ -1561,6 +1576,11 @@ const getTeacherAttendance = async (req, res) => {
       .populate('teacher', 'firstName lastName email teacherInfo.employeeId')
       .populate('markedBy', 'firstName lastName')
       .sort({ date: -1, 'teacher.firstName': 1 });
+    
+    // Calendar view - detailed day-by-day breakdown
+    if (calendarView === 'true' && dateRange) {
+      return await getCalendarViewAttendance(req, res, dateRange, attendance);
+    }
     
     // Enhanced response with submission metadata for single date queries
     let responseData = {
@@ -1617,6 +1637,158 @@ const getTeacherAttendance = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching teacher attendance',
+      error: error.message
+    });
+  }
+};
+
+// Helper function for calendar view attendance
+const getCalendarViewAttendance = async (req, res, dateRange, attendanceRecords) => {
+  try {
+    // Get all active teachers for this tenant
+    const teachers = await User.find({
+      tenant: req.user.tenant._id,
+      role: 'teacher',
+      isActive: true
+    }).select('firstName lastName email teacherInfo.employeeId').sort('firstName');
+    
+    // Generate all dates in the range
+    const dates = [];
+    const currentDate = new Date(dateRange.start);
+    const endDate = new Date(dateRange.end);
+    
+    while (currentDate <= endDate) {
+      dates.push(new Date(currentDate));
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    // Create attendance map for quick lookup
+    const attendanceMap = new Map();
+    attendanceRecords.forEach(record => {
+      const dateKey = record.date.toISOString().split('T')[0];
+      const teacherKey = record.teacher._id.toString();
+      const key = `${dateKey}-${teacherKey}`;
+      attendanceMap.set(key, record);
+    });
+    
+    // Build calendar data
+    const calendarData = dates.map(date => {
+      const dateStr = date.toISOString().split('T')[0];
+      const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+      
+      const teacherAttendance = teachers.map(teacher => {
+        const key = `${dateStr}-${teacher._id.toString()}`;
+        const attendanceRecord = attendanceMap.get(key);
+        
+        return {
+          teacherId: teacher._id,
+          teacherName: `${teacher.firstName} ${teacher.lastName}`,
+          employeeId: teacher.teacherInfo?.employeeId,
+          email: teacher.email,
+          status: attendanceRecord?.status || 'not_marked',
+          remarks: attendanceRecord?.remarks || null,
+          checkInTime: attendanceRecord?.checkInTime || null,
+          checkOutTime: attendanceRecord?.checkOutTime || null,
+          lateBy: attendanceRecord?.lateBy || null,
+          workingHours: attendanceRecord?.workingHours || null,
+          markedBy: attendanceRecord?.markedBy ? {
+            id: attendanceRecord.markedBy._id,
+            name: `${attendanceRecord.markedBy.firstName} ${attendanceRecord.markedBy.lastName}`
+          } : null,
+          markedAt: attendanceRecord?.createdAt || null
+        };
+      });
+      
+      // Calculate daily statistics
+      const totalTeachers = teachers.length;
+      const presentCount = teacherAttendance.filter(t => t.status === 'present').length;
+      const absentCount = teacherAttendance.filter(t => t.status === 'absent').length;
+      const lateCount = teacherAttendance.filter(t => t.status === 'late').length;
+      const notMarkedCount = teacherAttendance.filter(t => t.status === 'not_marked').length;
+      const isFullyMarked = notMarkedCount === 0;
+      const isPartiallyMarked = notMarkedCount > 0 && notMarkedCount < totalTeachers;
+      
+      return {
+        date: dateStr,
+        dayName: dayName,
+        isWeekend: date.getDay() === 0 || date.getDay() === 6, // Sunday = 0, Saturday = 6
+        statistics: {
+          totalTeachers,
+          present: presentCount,
+          absent: absentCount,
+          late: lateCount,
+          notMarked: notMarkedCount,
+          attendanceRate: totalTeachers > 0 ? Math.round(((presentCount + lateCount) / totalTeachers) * 100) : 0,
+          isFullyMarked,
+          isPartiallyMarked,
+          completionRate: totalTeachers > 0 ? Math.round(((totalTeachers - notMarkedCount) / totalTeachers) * 100) : 0
+        },
+        teachers: teacherAttendance
+      };
+    });
+    
+    // Calculate overall summary for the period
+    const overallStats = {
+      totalDays: dates.length,
+      totalTeachers: teachers.length,
+      totalPossibleRecords: dates.length * teachers.length,
+      totalMarkedRecords: attendanceRecords.length,
+      totalNotMarked: (dates.length * teachers.length) - attendanceRecords.length,
+      fullyMarkedDays: calendarData.filter(day => day.statistics.isFullyMarked).length,
+      partiallyMarkedDays: calendarData.filter(day => day.statistics.isPartiallyMarked).length,
+      notMarkedDays: calendarData.filter(day => day.statistics.notMarked === day.statistics.totalTeachers).length,
+      overallCompletionRate: ((attendanceRecords.length / (dates.length * teachers.length)) * 100).toFixed(1)
+    };
+    
+    // Teacher-wise summary
+    const teacherSummary = teachers.map(teacher => {
+      const teacherRecords = attendanceRecords.filter(record => 
+        record.teacher._id.toString() === teacher._id.toString()
+      );
+      
+      const presentDays = teacherRecords.filter(r => r.status === 'present').length;
+      const absentDays = teacherRecords.filter(r => r.status === 'absent').length;
+      const lateDays = teacherRecords.filter(r => r.status === 'late').length;
+      const notMarkedDays = dates.length - teacherRecords.length;
+      const totalWorkingHours = teacherRecords.reduce((sum, r) => sum + (r.workingHours || 0), 0);
+      
+      return {
+        teacherId: teacher._id,
+        teacherName: `${teacher.firstName} ${teacher.lastName}`,
+        employeeId: teacher.teacherInfo?.employeeId,
+        email: teacher.email,
+        summary: {
+          totalDays: dates.length,
+          presentDays,
+          absentDays,
+          lateDays,
+          notMarkedDays,
+          attendanceRate: dates.length > 0 ? Math.round(((presentDays + lateDays) / dates.length) * 100) : 0,
+          completionRate: dates.length > 0 ? Math.round(((dates.length - notMarkedDays) / dates.length) * 100) : 0,
+          totalWorkingHours: Math.round(totalWorkingHours * 100) / 100,
+          averageWorkingHours: teacherRecords.length > 0 ? Math.round((totalWorkingHours / teacherRecords.length) * 100) / 100 : 0
+        }
+      };
+    });
+    
+    return res.status(200).json({
+      success: true,
+      calendarView: true,
+      period: {
+        startDate: dateRange.start.toISOString().split('T')[0],
+        endDate: dateRange.end.toISOString().split('T')[0],
+        totalDays: dates.length
+      },
+      overallSummary: overallStats,
+      teacherSummary: teacherSummary,
+      dailyBreakdown: calendarData
+    });
+    
+  } catch (error) {
+    console.error('Error generating calendar view:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error generating calendar view',
       error: error.message
     });
   }
