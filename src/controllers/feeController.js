@@ -1,4 +1,5 @@
 // src/controllers/feeController.js - Enhanced Version Without Installments
+const mongoose = require('mongoose');
 const { FeeStructure, FeeAssignment, FeePayment } = require('../models/Fee');
 const Student = require('../models/Student');
 const Class = require('../models/Class');
@@ -320,19 +321,25 @@ const recordFeePayment = async (req, res) => {
   }
 };
 
-// @desc    Get all payments
+// @desc    Get all payments with enhanced filtering
 // @route   GET /api/admin/fees/payments
 // @access  Private/Admin
 const getPayments = async (req, res) => {
   try {
-    const { startDate, endDate, studentId, paymentMethod } = req.query;
+    const { 
+      startDate, 
+      endDate, 
+      studentId, 
+      paymentMethod, 
+      fullyPaidStudents, 
+      maxPendingAmount 
+    } = req.query;
     
-    const query = {
+    let query = {
       tenant: req.user.tenant._id
     };
     
     if (studentId) query.student = studentId;
-    
     if (paymentMethod) query.paymentMethod = paymentMethod;
     
     if (startDate || endDate) {
@@ -341,7 +348,90 @@ const getPayments = async (req, res) => {
       if (endDate) query.paymentDate.$lte = new Date(endDate);
     }
     
-    const payments = await FeePayment.find(query)
+    let payments;
+    
+    // Handle special filters for students with specific fee status
+    if (fullyPaidStudents === 'true' || maxPendingAmount === 'true') {
+      // Get all fee assignments to analyze student payment status
+      const assignments = await FeeAssignment.find({
+        tenant: req.user.tenant._id,
+        status: { $ne: 'cancelled' }
+      }).populate('student', 'firstName lastName studentId');
+      
+      let targetStudentIds = [];
+      
+      if (fullyPaidStudents === 'true') {
+        // Find students who have fully paid all their fees
+        const studentPaymentStatus = {};
+        
+        assignments.forEach(assignment => {
+          const studentId = assignment.student?._id.toString();
+          if (!studentId) return;
+          
+          if (!studentPaymentStatus[studentId]) {
+            studentPaymentStatus[studentId] = {
+              totalFees: 0,
+              hasUnpaidFees: false
+            };
+          }
+          
+          studentPaymentStatus[studentId].totalFees++;
+          const pendingAmount = assignment.calculatePendingAmount();
+          if (pendingAmount > 0) {
+            studentPaymentStatus[studentId].hasUnpaidFees = true;
+          }
+        });
+        
+        // Get students who have fees assigned but no unpaid fees
+        targetStudentIds = Object.keys(studentPaymentStatus)
+          .filter(studentId => 
+            studentPaymentStatus[studentId].totalFees > 0 && 
+            !studentPaymentStatus[studentId].hasUnpaidFees
+          );
+      }
+      
+      if (maxPendingAmount === 'true') {
+        // Find students with maximum pending amounts
+        const studentPendingAmounts = {};
+        
+        assignments.forEach(assignment => {
+          const studentId = assignment.student?._id.toString();
+          if (!studentId) return;
+          
+          if (!studentPendingAmounts[studentId]) {
+            studentPendingAmounts[studentId] = 0;
+          }
+          
+          studentPendingAmounts[studentId] += assignment.calculatePendingAmount();
+        });
+        
+        // Sort by pending amount and get top students
+        const sortedStudents = Object.entries(studentPendingAmounts)
+          .filter(([_, amount]) => amount > 0)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10); // Top 10 students with highest pending amounts
+        
+        targetStudentIds = sortedStudents.map(([studentId, _]) => studentId);
+      }
+      
+      // Add student filter to query
+      if (targetStudentIds.length > 0) {
+        query.student = { $in: targetStudentIds.map(id => mongoose.Types.ObjectId(id)) };
+      } else {
+        // No students match the criteria, return empty result
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          totalAmount: 0,
+          data: [],
+          message: fullyPaidStudents === 'true' 
+            ? 'No students have fully paid all their fees'
+            : 'No students with pending amounts found'
+        });
+      }
+    }
+    
+    payments = await FeePayment.find(query)
       .populate('student', 'firstName lastName studentId')
       .populate('collectedBy', 'firstName lastName')
       .sort('-paymentDate');
@@ -1087,6 +1177,146 @@ function calculateDueDate(frequency, dueDateDay = 10) {
   return dueDate;
 }
 
+// @desc    Get students by payment status with detailed analysis
+// @route   GET /api/admin/fees/students-by-status
+// @access  Private/Admin
+const getStudentsByPaymentStatus = async (req, res) => {
+  try {
+    const { 
+      status, // 'fully_paid', 'pending', 'overdue', 'max_pending'
+      limit = 10,
+      academicYear 
+    } = req.query;
+    
+    const query = {
+      tenant: req.user.tenant._id,
+      status: { $ne: 'cancelled' }
+    };
+    
+    if (academicYear) query.academicYear = academicYear;
+    
+    const assignments = await FeeAssignment.find(query)
+      .populate('student', 'firstName lastName studentId class rollNumber')
+      .populate('feeStructure', 'name category amount');
+    
+    const studentAnalysis = {};
+    
+    // Analyze each assignment
+    assignments.forEach(assignment => {
+      const studentId = assignment.student?._id.toString();
+      if (!studentId) return;
+      
+      assignment.updateStatus();
+      const pendingAmount = assignment.calculatePendingAmount();
+      
+      if (!studentAnalysis[studentId]) {
+        studentAnalysis[studentId] = {
+          student: assignment.student,
+          totalFees: 0,
+          totalExpected: 0,
+          totalPaid: 0,
+          totalPending: 0,
+          totalOverdue: 0,
+          assignments: [],
+          paymentStatus: 'pending'
+        };
+      }
+      
+      const analysis = studentAnalysis[studentId];
+      analysis.totalFees++;
+      analysis.totalExpected += assignment.finalAmount;
+      analysis.totalPaid += assignment.paidAmount || 0;
+      
+      if (pendingAmount > 0) {
+        if (assignment.status === FEE_STATUS.OVERDUE) {
+          analysis.totalOverdue += pendingAmount;
+        } else {
+          analysis.totalPending += pendingAmount;
+        }
+      }
+      
+      analysis.assignments.push({
+        feeId: assignment._id,
+        feeName: assignment.feeStructure?.name,
+        amount: assignment.finalAmount,
+        paid: assignment.paidAmount || 0,
+        pending: pendingAmount,
+        status: assignment.status,
+        dueDate: assignment.dueDate
+      });
+    });
+    
+    // Determine payment status for each student
+    Object.values(studentAnalysis).forEach(analysis => {
+      const totalPendingAndOverdue = analysis.totalPending + analysis.totalOverdue;
+      
+      if (totalPendingAndOverdue === 0 && analysis.totalFees > 0) {
+        analysis.paymentStatus = 'fully_paid';
+      } else if (analysis.totalOverdue > 0) {
+        analysis.paymentStatus = 'overdue';
+      } else if (analysis.totalPending > 0) {
+        analysis.paymentStatus = 'pending';
+      }
+    });
+    
+    // Filter based on status
+    let filteredStudents = Object.values(studentAnalysis);
+    
+    switch (status) {
+      case 'fully_paid':
+        filteredStudents = filteredStudents.filter(s => s.paymentStatus === 'fully_paid');
+        break;
+      case 'pending':
+        filteredStudents = filteredStudents.filter(s => s.paymentStatus === 'pending');
+        break;
+      case 'overdue':
+        filteredStudents = filteredStudents.filter(s => s.paymentStatus === 'overdue');
+        break;
+      case 'max_pending':
+        filteredStudents = filteredStudents
+          .filter(s => s.totalPending + s.totalOverdue > 0)
+          .sort((a, b) => (b.totalPending + b.totalOverdue) - (a.totalPending + a.totalOverdue));
+        break;
+    }
+    
+    // Apply limit
+    if (limit && parseInt(limit) > 0) {
+      filteredStudents = filteredStudents.slice(0, parseInt(limit));
+    }
+    
+    // Format response
+    const result = filteredStudents.map(analysis => ({
+      studentId: analysis.student._id,
+      studentName: `${analysis.student.firstName} ${analysis.student.lastName}`,
+      studentNumber: analysis.student.studentId,
+      rollNumber: analysis.student.rollNumber,
+      totalFees: analysis.totalFees,
+      totalExpected: analysis.totalExpected,
+      totalPaid: analysis.totalPaid,
+      totalPending: analysis.totalPending,
+      totalOverdue: analysis.totalOverdue,
+      paymentStatus: analysis.paymentStatus,
+      completionPercentage: analysis.totalExpected > 0 
+        ? Math.round((analysis.totalPaid / analysis.totalExpected) * 100) 
+        : 0,
+      feeDetails: analysis.assignments
+    }));
+    
+    res.status(200).json({
+      success: true,
+      count: result.length,
+      filter: status || 'all',
+      data: result
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: 'Error fetching students by payment status',
+      error: error.message
+    });
+  }
+};
+
 // Legacy support - redirect to new endpoint
 const getFeeSummary = async (req, res) => {
   // For backward compatibility, default to school summary
@@ -1102,6 +1332,7 @@ module.exports = {
   getStudentFees,
   recordFeePayment,
   getPayments,
+  getStudentsByPaymentStatus,
   getFeeSummary,
   getSchoolFeeSummary,
   getClassFeeSummary,

@@ -51,6 +51,7 @@ const {
   getStudentFees,
   recordFeePayment,
   getPayments,
+  getStudentsByPaymentStatus,
   getFeeSummary,
   getSchoolFeeSummary,   
   getClassFeeSummary,   
@@ -173,6 +174,7 @@ router.post('/fees/assign', assignFeeToStudent);
 router.get('/fees/student/:studentId', getStudentFees);
 router.post('/fees/payment', recordFeePayment);
 router.get('/fees/payments', getPayments);
+router.get('/fees/students-by-status', getStudentsByPaymentStatus);
 
 // Enhanced fee summary endpoints
 router.get('/fees/summary', getFeeSummary);
