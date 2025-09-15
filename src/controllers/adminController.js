@@ -878,7 +878,7 @@ const createStudent = async (req, res) => {
       tenant: req.user.tenant._id,
       isActive: true
     }).session(session);
-    
+
     if (!classObj) {
       await session.abortTransaction();
       return res.status(404).json({
@@ -886,12 +886,38 @@ const createStudent = async (req, res) => {
         message: 'Class not found or inactive'
       });
     }
-    
+
     if (!(await classObj.hasCapacity())) {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: 'Class is at full capacity'
+      });
+    }
+
+    // Check for duplicate roll number within the same class
+    const existingStudent = await Student.findOne({
+      tenant: req.user.tenant._id,
+      class: classId,
+      rollNumber: rollNumber,
+      isActive: true
+    }).session(session);
+
+    if (existingStudent) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Roll number ${rollNumber} is already assigned to another student in this class. Please choose a different roll number.`,
+        duplicateField: 'rollNumber',
+        conflictDetails: {
+          existingStudent: {
+            id: existingStudent._id,
+            name: `${existingStudent.firstName} ${existingStudent.lastName}`,
+            rollNumber: existingStudent.rollNumber
+          },
+          className: classObj.name,
+          section: classObj.section
+        }
       });
     }
     
@@ -1005,6 +1031,35 @@ const createStudent = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
+
+    // Handle MongoDB duplicate key error specifically for roll number
+    if (error.code === 11000) {
+      const duplicateField = Object.keys(error.keyPattern)[0];
+
+      if (duplicateField === 'rollNumber' || error.message.includes('rollNumber')) {
+        return res.status(400).json({
+          success: false,
+          message: `Roll number ${req.body.rollNumber} is already taken in this class. Please choose a different roll number.`,
+          duplicateField: 'rollNumber'
+        });
+      }
+
+      if (duplicateField === 'admissionNumber' || error.message.includes('admissionNumber')) {
+        return res.status(400).json({
+          success: false,
+          message: `Admission number ${req.body.admissionNumber} is already taken. Please choose a different admission number.`,
+          duplicateField: 'admissionNumber'
+        });
+      }
+
+      // Generic duplicate key error
+      return res.status(400).json({
+        success: false,
+        message: 'A student with these details already exists. Please check roll number and admission number.',
+        error: 'Duplicate entry'
+      });
+    }
+
     res.status(400).json({
       success: false,
       message: 'Error creating student',
