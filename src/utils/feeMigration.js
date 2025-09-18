@@ -106,13 +106,18 @@ class FeeMigrationService {
     console.log(`Paid Amount: ${paidAmount}`);
     console.log(`Final Amount: ${assignment.finalAmount}`);
 
-    // Get category information by ObjectId
-    const categoryInfo = await FeeCategory.findOne({
-      tenant: tenantId,
-      _id: category
-    });
+    let categoryCode = 'NO_CATEGORY';
 
-    const categoryCode = categoryInfo?.code || category;
+    if (category) {
+      // Get category information by ObjectId
+      const categoryInfo = await FeeCategory.findOne({
+        tenant: tenantId,
+        _id: category
+      });
+
+      categoryCode = categoryInfo?.code || category.toString();
+    }
+
     console.log(`Category Code: ${categoryCode}`);
 
     if (this.isCategoryPreservedAcrossClasses(categoryCode)) {
@@ -208,12 +213,23 @@ class FeeMigrationService {
     }
 
     // Step 3: Find equivalent fee structure in new class
-    const newFeeStructure = await FeeStructure.findOne({
-      tenant: tenantId,
-      category: category,
-      classes: newClassId,
-      isActive: true
-    });
+    let newFeeStructure = null;
+
+    if (category) {
+      newFeeStructure = await FeeStructure.findOne({
+        tenant: tenantId,
+        category: category,
+        classes: newClassId,
+        isActive: true
+      });
+    } else {
+      // If no category, try to find by name (fallback for uncategorized fees)
+      newFeeStructure = await FeeStructure.findOne({
+        tenant: tenantId,
+        classes: newClassId,
+        isActive: true
+      });
+    }
 
     if (newFeeStructure) {
       // Create new assignment for new class
@@ -235,15 +251,13 @@ class FeeMigrationService {
       migrationResult.newAssignments.push({
         assignmentId: newAssignment._id,
         feeName: newFeeStructure.name,
-        category: category,
+        category: category ? category.toString() : 'NO_CATEGORY',
         amount: newFeeStructure.amount,
         oldAmount: assignment.finalAmount,
         creditAvailable: paidAmount
       });
 
       migrationResult.summary.newFeesAssigned += 1;
-
-      console.log(`✓ Created new assignment: ${newFeeStructure.name} (${newFeeStructure.amount})`);
     } else {
       console.log(`⚠ No equivalent fee structure found in new class for category: ${category}`);
     }
@@ -292,7 +306,7 @@ class FeeMigrationService {
 
     // Only include non-cancelled assignments in the existing categories check
     currentAssignments.forEach(assignment => {
-      if (assignment.feeStructure && assignment.status !== 'cancelled') {
+      if (assignment.feeStructure && assignment.status !== 'cancelled' && assignment.feeStructure.category) {
         existingCategories.add(assignment.feeStructure.category.toString());
       }
     });
@@ -300,19 +314,22 @@ class FeeMigrationService {
     console.log(`Existing categories: [${Array.from(existingCategories).join(', ')}]`);
 
     for (const feeStructure of newClassFeeStructures) {
-      const category = feeStructure.category.toString();
+      const category = feeStructure.category ? feeStructure.category.toString() : 'NO_CATEGORY';
 
       console.log(`\n🔍 Checking fee structure: ${feeStructure.name}, category: ${category}`);
       console.log(`   Amount: ₹${feeStructure.amount}`);
       console.log(`   Category exists in student's current assignments: ${existingCategories.has(category)}`);
 
-      // Skip if we already have this category assigned (and not cancelled)
-      if (existingCategories.has(category)) {
+      // For fee structures without categories, always create new assignment
+      // (since we can't determine if it's a duplicate based on category)
+      if (category === 'NO_CATEGORY') {
+        console.log(`   ✅ Will create new assignment for ${feeStructure.name} (no category - treating as new)`);
+      } else if (existingCategories.has(category)) {
         console.log(`   ⏭️ Skipping ${feeStructure.name} - category already exists`);
         continue;
+      } else {
+        console.log(`   ✅ Will create new assignment for ${feeStructure.name}`);
       }
-
-      console.log(`   ✅ Will create new assignment for ${feeStructure.name}`);
 
       // Create new assignment
       const newAssignment = await FeeAssignment.create({
