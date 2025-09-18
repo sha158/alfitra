@@ -74,26 +74,190 @@ const createTeacher = async (req, res) => {
   }
 };
 
-// @desc    Get all teachers
+// @desc    Get all teachers with pagination
 // @route   GET /api/admin/teachers
 // @access  Private/Admin
 const getTeachers = async (req, res) => {
   try {
-    const teachers = await User.find({
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      sortBy = 'firstName',
+      sortOrder = 'asc',
+      subject
+    } = req.query;
+
+    // Build query
+    const query = {
       tenant: req.user.tenant._id,
       role: 'teacher',
       isActive: true
-    }).select('-password');
-    
+    };
+
+    // Add search functionality
+    if (search) {
+      query.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { 'teacherInfo.employeeId': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Filter by subject
+    if (subject) {
+      query['teacherInfo.subjects'] = { $in: [new RegExp(subject, 'i')] };
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build sort object
+    const sortObj = {};
+    sortObj[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+    // Get total count for pagination info
+    const totalTeachers = await User.countDocuments(query);
+
+    // Get paginated teachers
+    const teachers = await User.find(query)
+      .select('-password')
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limitNum);
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(totalTeachers / limitNum);
+    const hasNextPage = pageNum < totalPages;
+    const hasPrevPage = pageNum > 1;
+
     res.status(200).json({
       success: true,
-      count: teachers.length,
-      data: teachers
+      data: teachers,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalTeachers,
+        teachersPerPage: limitNum,
+        hasNextPage,
+        hasPrevPage,
+        nextPage: hasNextPage ? pageNum + 1 : null,
+        prevPage: hasPrevPage ? pageNum - 1 : null
+      },
+      filters: {
+        search: search || null,
+        subject: subject || null,
+        sortBy,
+        sortOrder
+      }
     });
   } catch (error) {
     res.status(400).json({
       success: false,
       message: 'Error fetching teachers',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get all parents with pagination
+// @route   GET /api/admin/parents
+// @access  Private/Admin
+const getParents = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      sortBy = 'firstName',
+      sortOrder = 'asc'
+    } = req.query;
+
+    // Build query
+    const query = {
+      tenant: req.user.tenant._id,
+      role: 'parent',
+      isActive: true
+    };
+
+    // Add search functionality
+    if (search) {
+      query.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build sort object
+    const sortObj = {};
+    sortObj[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+    // Get total count for pagination info
+    const totalParents = await User.countDocuments(query);
+
+    // Get paginated parents with their children
+    const parents = await User.find(query)
+      .select('-password')
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limitNum);
+
+    // Get children for each parent
+    const parentsWithChildren = await Promise.all(
+      parents.map(async (parent) => {
+        const children = await Student.find({
+          parent: parent._id,
+          tenant: req.user.tenant._id,
+          isActive: true
+        })
+        .populate('class', 'name section displayName')
+        .select('firstName lastName class rollNumber studentId');
+
+        return {
+          ...parent.toObject(),
+          children: children
+        };
+      })
+    );
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(totalParents / limitNum);
+    const hasNextPage = pageNum < totalPages;
+    const hasPrevPage = pageNum > 1;
+
+    res.status(200).json({
+      success: true,
+      data: parentsWithChildren,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalParents,
+        parentsPerPage: limitNum,
+        hasNextPage,
+        hasPrevPage,
+        nextPage: hasNextPage ? pageNum + 1 : null,
+        prevPage: hasPrevPage ? pageNum - 1 : null
+      },
+      filters: {
+        search: search || null,
+        sortBy,
+        sortOrder
+      }
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: 'Error fetching parents',
       error: error.message
     });
   }
@@ -362,29 +526,111 @@ const createClass = async (req, res) => {
     session.endSession();
   }
 };
-// @desc    Get all classes
-// @route   GET /api/admin/classes
-// @access  Private/Admin
-// @desc    Get all classes
-// @route   GET /api/admin/classes
-// @access  Private/Admin
-// @desc    Get all classes
+// @desc    Get all classes with pagination
 // @route   GET /api/admin/classes
 // @access  Private/Admin
 const getClasses = async (req, res) => {
   try {
-    const classes = await Class.find({
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      sortBy = 'name',
+      sortOrder = 'asc',
+      academicYear,
+      teacherId
+    } = req.query;
+
+    // Build query
+    const query = {
       tenant: req.user.tenant._id,
       isActive: true
-    })
-    .populate('classTeacher', 'firstName lastName email')
-    .populate('subjectTeachers.teacher', 'firstName lastName email')
-    .populate('feeStructure', 'name category amount frequency academicYear description isActive');
+    };
+
+    // Add search functionality
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { section: { $regex: search, $options: 'i' } },
+        { room: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Filter by academic year
+    if (academicYear) {
+      query.academicYear = academicYear;
+    }
+
+    // Filter by teacher (class teacher or subject teacher)
+    if (teacherId) {
+      query.$or = [
+        { classTeacher: teacherId },
+        { 'subjectTeachers.teacher': teacherId }
+      ];
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build sort object
+    const sortObj = {};
+    sortObj[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+    // Get total count for pagination info
+    const totalClasses = await Class.countDocuments(query);
+
+    // Get paginated classes
+    const classes = await Class.find(query)
+      .populate('classTeacher', 'firstName lastName email')
+      .populate('subjectTeachers.teacher', 'firstName lastName email')
+      .populate('feeStructure', 'name category amount frequency academicYear description isActive')
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limitNum);
+
+    // Get student count for each class
+    const classesWithStudentCount = await Promise.all(
+      classes.map(async (classDoc) => {
+        const studentCount = await Student.countDocuments({
+          class: classDoc._id,
+          tenant: req.user.tenant._id,
+          isActive: true
+        });
+
+        return {
+          ...classDoc.toObject(),
+          studentCount
+        };
+      })
+    );
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(totalClasses / limitNum);
+    const hasNextPage = pageNum < totalPages;
+    const hasPrevPage = pageNum > 1;
 
     res.status(200).json({
       success: true,
-      count: classes.length,
-      data: classes
+      data: classesWithStudentCount,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalClasses,
+        classesPerPage: limitNum,
+        hasNextPage,
+        hasPrevPage,
+        nextPage: hasNextPage ? pageNum + 1 : null,
+        prevPage: hasPrevPage ? pageNum - 1 : null
+      },
+      filters: {
+        search: search || null,
+        academicYear: academicYear || null,
+        teacherId: teacherId || null,
+        sortBy,
+        sortOrder
+      }
     });
   } catch (error) {
     res.status(400).json({
@@ -988,20 +1234,10 @@ const createStudent = async (req, res) => {
             reason: feeDiscount.reason || 'Admission discount'
           };
           assignment.finalAmount = assignment.totalAmount - feeDiscount.amount;
-          
-          // Recalculate installments with discount
-          const feeStructure = await FeeStructure.findById(assignment.feeStructure);
-          
-          // Recreate installments with discounted amount
-          const discountPerInstallment = feeDiscount.amount / assignment.installments.length;
-          assignment.installments = assignment.installments.map((inst, index) => ({
-            ...inst.toObject ? inst.toObject() : inst,
-            amount: inst.amount - discountPerInstallment,
-            installmentNumber: index + 1,
-            status: 'pending',
-            paidAmount: 0
-          }));
-          
+
+          // Update the status to reflect the discount has been applied
+          assignment.updateStatus();
+
           await assignment.save({ session });
         }
       }
@@ -1070,29 +1306,85 @@ const createStudent = async (req, res) => {
   }
 };
 
-// @desc    Get all students
+// @desc    Get all students with pagination
 // @route   GET /api/admin/students
 // @access  Private/Admin
 const getStudents = async (req, res) => {
   try {
-    const { classId, status } = req.query;
-    
+    const {
+      classId,
+      status,
+      page = 1,
+      limit = 10,
+      search,
+      sortBy = 'firstName',
+      sortOrder = 'asc'
+    } = req.query;
+
+    // Build query
     const query = {
       tenant: req.user.tenant._id,
       isActive: true
     };
-    
+
     if (classId) query.class = classId;
     if (status) query.status = status;
-    
+
+    // Add search functionality
+    if (search) {
+      query.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { admissionNumber: { $regex: search, $options: 'i' } },
+        { studentId: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build sort object
+    const sortObj = {};
+    sortObj[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+    // Get total count for pagination info
+    const totalStudents = await Student.countDocuments(query);
+
+    // Get paginated students
     const students = await Student.find(query)
-      .populate('class', 'name section')
-      .populate('parent', 'firstName lastName email phone');
-    
+      .populate('class', 'name section displayName')
+      .populate('parent', 'firstName lastName email phone')
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limitNum);
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(totalStudents / limitNum);
+    const hasNextPage = pageNum < totalPages;
+    const hasPrevPage = pageNum > 1;
+
     res.status(200).json({
       success: true,
-      count: students.length,
-      data: students
+      data: students,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalStudents,
+        studentsPerPage: limitNum,
+        hasNextPage,
+        hasPrevPage,
+        nextPage: hasNextPage ? pageNum + 1 : null,
+        prevPage: hasPrevPage ? pageNum - 1 : null
+      },
+      filters: {
+        classId: classId || null,
+        status: status || null,
+        search: search || null,
+        sortBy,
+        sortOrder
+      }
     });
   } catch (error) {
     res.status(400).json({
@@ -1111,6 +1403,13 @@ const updateStudent = async (req, res) => {
   session.startTransaction();
 
   try {
+    console.log('\n=== UPDATE STUDENT REQUEST RECEIVED ===');
+    console.log('Student ID:', req.params.id);
+    console.log('Request Body:', JSON.stringify(req.body, null, 2));
+    console.log('User:', req.user?.email || 'Unknown');
+    console.log('Tenant:', req.user?.tenant?._id || 'Unknown');
+    console.log('==========================================');
+
     const {
       parentFirstName,
       parentLastName,
@@ -1120,7 +1419,9 @@ const updateStudent = async (req, res) => {
       ...studentData
     } = req.body;
 
-    // Step 1: Find the student to get the parent's ID
+    console.log('Student Data after destructuring:', JSON.stringify(studentData, null, 2));
+
+    // Step 1: Find the student to get the parent's ID and current class
     const student = await Student.findOne({
       _id: req.params.id,
       tenant: req.user.tenant._id
@@ -1131,7 +1432,66 @@ const updateStudent = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    // Step 2: If parent details are provided, update the parent's User record
+    const originalClassId = student.class;
+    const newClassId = studentData.class;
+    const isClassChanging = newClassId && newClassId.toString() !== originalClassId.toString();
+
+    console.log('\n=== CLASS CHANGE DETECTION ===');
+    console.log('Original Class ID:', originalClassId);
+    console.log('New Class ID from request:', newClassId);
+    console.log('Original Class ID (string):', originalClassId?.toString());
+    console.log('New Class ID (string):', newClassId?.toString());
+    console.log('Is Class Changing?', isClassChanging);
+    console.log('================================');
+
+    // Step 2: If class is changing, validate new class and check for roll number conflicts
+    if (isClassChanging) {
+      // Validate new class exists
+      const newClassObj = await Class.findOne({
+        _id: newClassId,
+        tenant: req.user.tenant._id,
+        isActive: true
+      }).session(session);
+
+      if (!newClassObj) {
+        await session.abortTransaction();
+        return res.status(404).json({
+          success: false,
+          message: 'New class not found or inactive'
+        });
+      }
+
+      // Check for roll number conflicts in the new class (if roll number is being set)
+      if (studentData.rollNumber) {
+        const existingStudent = await Student.findOne({
+          tenant: req.user.tenant._id,
+          class: newClassId,
+          rollNumber: studentData.rollNumber,
+          isActive: true,
+          _id: { $ne: student._id } // Exclude current student
+        }).session(session);
+
+        if (existingStudent) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: `Roll number ${studentData.rollNumber} is already assigned to another student in the target class. Please choose a different roll number.`,
+            duplicateField: 'rollNumber',
+            conflictDetails: {
+              existingStudent: {
+                id: existingStudent._id,
+                name: `${existingStudent.firstName} ${existingStudent.lastName}`,
+                rollNumber: existingStudent.rollNumber
+              },
+              className: newClassObj.name,
+              section: newClassObj.section
+            }
+          });
+        }
+      }
+    }
+
+    // Step 3: If parent details are provided, update the parent's User record
     const parentUpdatePayload = {};
     if (parentFirstName) parentUpdatePayload.firstName = parentFirstName;
     if (parentLastName) parentUpdatePayload.lastName = parentLastName;
@@ -1147,24 +1507,112 @@ const updateStudent = async (req, res) => {
       );
     }
 
-    // Step 3: Update the student record with student-specific data
+    // Step 4: Handle fee migration if class is changing
+    let feeMessage = '';
+    let migrationResult = null;
+    if (isClassChanging) {
+      console.log('\n=== STARTING FEE MIGRATION DEBUG ===');
+      console.log('Student ID:', student._id);
+      console.log('Original Class ID:', originalClassId);
+      console.log('New Class ID:', newClassId);
+      console.log('Tenant ID:', req.user.tenant._id);
+      console.log('User ID:', req.user._id);
+      console.log('Request Body:', JSON.stringify(req.body, null, 2));
+
+      try {
+        // Import the enhanced fee migration service
+        const FeeMigrationService = require('../utils/feeMigration');
+
+        console.log('About to call handleClassChangeFeeMigration...');
+
+        // Use smart fee migration with credit system
+        migrationResult = await FeeMigrationService.handleClassChangeFeeMigration(
+          student._id,
+          originalClassId,
+          newClassId,
+          req.user.tenant._id,
+          req.user._id
+        );
+
+        console.log('Fee migration completed successfully');
+        console.log('Migration result:', JSON.stringify(migrationResult, null, 2));
+
+        // Build detailed fee migration message
+        const summary = migrationResult.summary;
+        feeMessage = ` Fee migration completed:`;
+
+        if (summary.preservedFees > 0) {
+          feeMessage += ` ${summary.preservedFees} fee(s) preserved (transport/shared fees).`;
+        }
+
+        if (summary.totalCreditsCreated > 0) {
+          feeMessage += ` ₹${summary.totalCreditsCreated} in credits created from cancelled fees.`;
+        }
+
+        if (summary.newFeesAssigned > 0) {
+          feeMessage += ` ${summary.newFeesAssigned} new fee(s) assigned for the new class.`;
+        }
+
+        if (summary.totalCreditsApplied > 0) {
+          feeMessage += ` ₹${summary.totalCreditsApplied} in credits automatically applied to new fees.`;
+        }
+
+        // If there are remaining credits, inform about them
+        const remainingCredits = summary.totalCreditsCreated - summary.totalCreditsApplied;
+        if (remainingCredits > 0) {
+          feeMessage += ` ₹${remainingCredits} in credits available for future use.`;
+        }
+
+      } catch (feeError) {
+        console.error('\n=== FEE MIGRATION ERROR ===');
+        console.error('Error handling fee migration during class change:', feeError);
+        console.error('Error stack:', feeError.stack);
+        console.error('Student ID:', student._id);
+        console.error('Original Class ID:', originalClassId);
+        console.error('New Class ID:', newClassId);
+        console.error('Tenant ID:', req.user.tenant._id);
+        feeMessage += ' Note: There was an issue with fee migration. Please check the fee assignments manually.';
+      }
+    } else {
+      console.log('Class is NOT changing - no fee migration needed');
+    }
+
+    // Step 5: Update the student record with student-specific data
     Object.assign(student, studentData);
     await student.save({ session });
 
-    // Step 4: Commit the transaction
+    // Step 6: Commit the transaction
     await session.commitTransaction();
-    
-    // Step 5: Populate the updated student with fresh parent data for the response
+
+    // Step 7: Populate the updated student with fresh parent data for the response
     const populatedStudent = await student.populate('class parent');
+
+    const responseMessage = isClassChanging
+      ? `Student transferred successfully from old class to new class.${feeMessage}`
+      : 'Student and parent details updated successfully.';
 
     res.status(200).json({
       success: true,
       data: populatedStudent,
-      message: 'Student and parent details updated successfully.'
+      message: responseMessage,
+      classChanged: isClassChanging,
+      feeUpdates: isClassChanging ? feeMessage.trim() : null
     });
 
   } catch (error) {
     await session.abortTransaction();
+
+    // Handle MongoDB duplicate key error specifically for roll number in new class
+    if (error.code === 11000) {
+      if (error.message.includes('rollNumber')) {
+        return res.status(400).json({
+          success: false,
+          message: `Roll number ${req.body.rollNumber} is already taken in the target class. Please choose a different roll number.`,
+          duplicateField: 'rollNumber'
+        });
+      }
+    }
+
     res.status(400).json({
       success: false,
       message: 'Error updating details',
@@ -1179,33 +1627,102 @@ const updateStudent = async (req, res) => {
 // @route   DELETE /api/admin/students/:id
 // @access  Private/Admin
 const deleteStudent = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const student = await Student.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        tenant: req.user.tenant._id
-      },
-      { isActive: false },
-      { new: true }
-    );
-    
+    const student = await Student.findOne({
+      _id: req.params.id,
+      tenant: req.user.tenant._id
+    }).session(session);
+
     if (!student) {
+      await session.abortTransaction();
       return res.status(404).json({
         success: false,
         message: 'Student not found'
       });
     }
-    
+
+    // Handle fee assignments when removing a student
+    const { FeeAssignment } = require('../models/Fee');
+
+    // Get current pending/unpaid fee assignments
+    const currentFeeAssignments = await FeeAssignment.find({
+      tenant: req.user.tenant._id,
+      student: student._id,
+      status: { $in: ['pending', 'partially_paid', 'overdue'] }
+    }).session(session);
+
+    let feeMessage = '';
+
+    if (currentFeeAssignments.length > 0) {
+      // Cancel unpaid fee assignments
+      const unpaidAssignments = currentFeeAssignments.filter(assignment =>
+        assignment.paidAmount === 0 || assignment.paidAmount === null
+      );
+
+      if (unpaidAssignments.length > 0) {
+        await FeeAssignment.updateMany(
+          { _id: { $in: unpaidAssignments.map(a => a._id) } },
+          {
+            $set: {
+              status: 'cancelled',
+              cancelledAt: new Date(),
+              cancelledBy: req.user._id,
+              cancellationReason: `Student deactivated/removed from school`
+            }
+          },
+          { session }
+        );
+
+        feeMessage += ` ${unpaidAssignments.length} unpaid fee assignment(s) have been cancelled.`;
+      }
+
+      // Keep partially paid assignments but mark them with notes
+      const partiallyPaidAssignments = currentFeeAssignments.filter(assignment =>
+        assignment.paidAmount > 0 && assignment.paidAmount < assignment.finalAmount
+      );
+
+      if (partiallyPaidAssignments.length > 0) {
+        await FeeAssignment.updateMany(
+          { _id: { $in: partiallyPaidAssignments.map(a => a._id) } },
+          {
+            $set: {
+              remarks: `Student deactivated on ${new Date().toISOString().split('T')[0]}. Partial payment retained.`
+            }
+          },
+          { session }
+        );
+
+        feeMessage += ` ${partiallyPaidAssignments.length} partially paid fee(s) have been retained with notes.`;
+      }
+    }
+
+    // Deactivate the student
+    student.isActive = false;
+    student.deactivatedAt = new Date();
+    student.deactivatedBy = req.user._id;
+    await student.save({ session });
+
+    await session.commitTransaction();
+
+    const responseMessage = `Student deactivated successfully.${feeMessage}`;
+
     res.status(200).json({
       success: true,
-      message: 'Student deactivated successfully'
+      message: responseMessage,
+      feeUpdates: feeMessage.trim() || null
     });
   } catch (error) {
+    await session.abortTransaction();
     res.status(400).json({
       success: false,
       message: 'Error deleting student',
       error: error.message
     });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -1417,16 +1934,15 @@ async function getFeeStatistics(tenantId) {
   
   assignments.forEach(assignment => {
     totalExpected += assignment.finalAmount;
-    
-    assignment.installments.forEach(inst => {
-      totalCollected += inst.paidAmount;
-      
-      if (inst.status === 'pending') {
-        totalPending += (inst.amount - inst.paidAmount);
-      } else if (inst.status === 'overdue') {
-        totalOverdue += (inst.amount - inst.paidAmount);
-      }
-    });
+    totalCollected += (assignment.paidAmount || 0);
+
+    const pendingAmount = assignment.finalAmount - (assignment.paidAmount || 0);
+
+    if (assignment.status === 'pending' || assignment.status === 'partially_paid') {
+      totalPending += pendingAmount;
+    } else if (assignment.status === 'overdue') {
+      totalOverdue += pendingAmount;
+    }
   });
   
   const collectionRate = totalExpected > 0 
@@ -2152,6 +2668,7 @@ module.exports = {
   updateClass,
   createStudent,
   getStudents,
+  getParents,
   updateStudent,
   deleteStudent,
   deleteClass,

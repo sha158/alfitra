@@ -29,6 +29,7 @@ const {
   updateClass,
   createStudent,
   getStudents,
+  getParents,
   deleteClass,
   updateStudent,
   deleteStudent,
@@ -158,6 +159,10 @@ router.route('/students/:id')
   .put(updateStudent)
   .delete(deleteStudent);
 
+// Parent routes
+router.route('/parents')
+  .get(getParents);
+
 // Reset user password
 router.put('/users/:id/reset-password', resetUserPassword);
 
@@ -175,6 +180,9 @@ router.get('/fees/student/:studentId', getStudentFees);
 router.post('/fees/payment', recordFeePayment);
 router.get('/fees/payments', getPayments);
 router.get('/fees/students-by-status', getStudentsByPaymentStatus);
+
+// Fee Credits routes
+router.use('/fee-credits', require('./feeCreditRoutes'));
 
 // Enhanced fee summary endpoints
 router.get('/fees/summary', getFeeSummary);

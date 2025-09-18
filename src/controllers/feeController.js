@@ -473,10 +473,10 @@ const getSchoolFeeSummary = async (req, res) => {
     // Get all fee assignments for the school
     const assignments = await FeeAssignment.find(query)
       .populate('feeStructure', 'name category frequency')
-      .populate('student', 'firstName lastName studentId class rollNumber');
-    
-    // Filter out assignments with null students
-    const validAssignments = assignments.filter(a => a.student !== null);
+      .populate('student', 'firstName lastName studentId class rollNumber isActive');
+
+    // Filter out assignments with null students or inactive students
+    const validAssignments = assignments.filter(a => a.student !== null && a.student.isActive === true);
     
     // Get all classes for grouping
     const classes = await Class.find({ tenant: tenantId }).select('name section displayName');
@@ -1196,15 +1196,15 @@ const getStudentsByPaymentStatus = async (req, res) => {
     if (academicYear) query.academicYear = academicYear;
     
     const assignments = await FeeAssignment.find(query)
-      .populate('student', 'firstName lastName studentId class rollNumber')
+      .populate('student', 'firstName lastName studentId class rollNumber isActive')
       .populate('feeStructure', 'name category amount');
-    
+
     const studentAnalysis = {};
-    
+
     // Analyze each assignment
     assignments.forEach(assignment => {
       const studentId = assignment.student?._id.toString();
-      if (!studentId) return;
+      if (!studentId || !assignment.student?.isActive) return;
       
       assignment.updateStatus();
       const pendingAmount = assignment.calculatePendingAmount();
