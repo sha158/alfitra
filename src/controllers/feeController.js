@@ -654,7 +654,8 @@ const getStudentFees = async (req, res) => {
     
     const feeAssignments = await FeeAssignment.find({
       tenant: req.user.tenant._id,
-      student: studentId
+      student: studentId,
+      status: { $ne: 'cancelled' }
     }).populate('feeStructure');
     
     // Update status for each assignment
@@ -722,7 +723,8 @@ const getStudentFees = async (req, res) => {
 async function getSchoolLevelSummary(baseQuery, studentId) {
   const assignments = await FeeAssignment.find({
     ...baseQuery,
-    student: studentId
+    student: studentId,
+    status: { $ne: 'cancelled' }
   })
   .populate('feeStructure', 'name category frequency')
   .populate('student', 'firstName lastName studentId class rollNumber');
