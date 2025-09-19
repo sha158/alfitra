@@ -20,6 +20,11 @@ class FeeMigrationService {
     console.log(`New Class: ${newClassId}`);
     console.log(`Tenant: ${tenantId}`);
 
+    // Start a database session for transaction consistency
+    const mongoose = require('mongoose');
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
     const migrationResult = {
       cancelledAssignments: [],
       preservedAssignments: [],
@@ -41,7 +46,7 @@ class FeeMigrationService {
         student: studentId,
         tenant: tenantId,
         status: { $ne: 'cancelled' }
-      }).populate('feeStructure');
+      }).populate('feeStructure').session(session);
 
       console.log(`Found ${currentAssignments.length} current assignments:`);
       currentAssignments.forEach((assignment, index) => {
@@ -66,7 +71,7 @@ class FeeMigrationService {
             cancelledBy: userId,
             cancellationReason: `Class change from ${oldClassId} to ${newClassId}`
           },
-          { new: true }
+          { new: true, session }
         );
 
         if (!cancellationResult) {
@@ -86,7 +91,7 @@ class FeeMigrationService {
 
         // Create credit if payment was made
         if (paidAmount > 0) {
-          const credit = await FeeCredit.create({
+          const credit = await FeeCredit.create([{
             tenant: tenantId,
             student: assignment.student,
             originalAssignment: assignment._id,
@@ -96,12 +101,14 @@ class FeeMigrationService {
             reason: 'class_change_overpayment',
             reasonDetails: `Credit created from cancelled ${assignment.feeStructure.name} due to class change`,
             createdBy: userId
-          });
+          }], { session });
+
+          const createdCredit = credit[0];
 
           migrationResult.creditsCreated.push({
-            creditId: credit._id,
+            creditId: createdCredit._id,
             amount: paidAmount,
-            reason: credit.reason,
+            reason: createdCredit.reason,
             originalFee: assignment.feeStructure.name
           });
 
@@ -118,7 +125,8 @@ class FeeMigrationService {
         newClassId,
         tenantId,
         userId,
-        migrationResult
+        migrationResult,
+        session
       );
 
       // Step 4: Apply available credits to new assignments
@@ -126,7 +134,8 @@ class FeeMigrationService {
       await this.applyAvailableCredits(
         studentId,
         tenantId,
-        migrationResult
+        migrationResult,
+        session
       );
 
       // Step 5: Verification - Ensure no old assignments are still active
@@ -135,7 +144,7 @@ class FeeMigrationService {
         student: studentId,
         tenant: tenantId,
         status: { $ne: 'cancelled' }
-      }).populate('feeStructure');
+      }).populate('feeStructure').session(session);
 
       console.log(`Found ${remainingActiveAssignments.length} active assignments after migration:`);
       remainingActiveAssignments.forEach((assignment, index) => {
@@ -148,11 +157,20 @@ class FeeMigrationService {
       console.log(`New Fees: ${migrationResult.summary.newFeesAssigned}`);
       console.log(`Preserved Fees: ${migrationResult.summary.preservedFees}`);
 
+      // Commit the transaction
+      await session.commitTransaction();
+      console.log('✅ Transaction committed successfully');
+
       return migrationResult;
 
     } catch (error) {
+      // Rollback the transaction on error
+      await session.abortTransaction();
+      console.error('❌ Transaction aborted due to error');
       console.error('Error in fee migration:', error);
       throw new Error(`Fee migration failed: ${error.message}`);
+    } finally {
+      session.endSession();
     }
   }
 
@@ -160,7 +178,7 @@ class FeeMigrationService {
   /**
    * Auto-assign new class fees that don't exist in old class
    */
-  static async assignNewClassFees(studentId, newClassId, tenantId, userId, migrationResult) {
+  static async assignNewClassFees(studentId, newClassId, tenantId, userId, migrationResult, session) {
     console.log(`\nChecking for new class-specific fees...`);
     console.log(`Student ID: ${studentId}`);
     console.log(`New Class ID: ${newClassId}`);
@@ -171,7 +189,7 @@ class FeeMigrationService {
       tenant: tenantId,
       classes: newClassId,
       isActive: true
-    });
+    }).session(session);
 
     console.log(`Found ${newClassFeeStructures.length} fee structures for new class:`);
     newClassFeeStructures.forEach((fs, index) => {
@@ -194,7 +212,7 @@ class FeeMigrationService {
       console.log(`\n✅ Creating assignment for: ${feeStructure.name}, category: ${category}, amount: ₹${feeStructure.amount}`);
 
       // Create new assignment
-      const newAssignment = await FeeAssignment.create({
+      const newAssignment = await FeeAssignment.create([{
         tenant: tenantId,
         student: studentId,
         feeStructure: feeStructure._id,
@@ -205,12 +223,14 @@ class FeeMigrationService {
         dueDate: this.calculateDueDate(feeStructure.frequency, feeStructure.dueDate),
         status: FEE_STATUS.PENDING,
         paidAmount: 0
-      });
+      }], { session });
 
-      console.log(`✓ Added new fee: ${feeStructure.name} (₹${feeStructure.amount}, ID: ${newAssignment._id})`);
+      const createdAssignment = newAssignment[0];
+
+      console.log(`✓ Added new fee: ${feeStructure.name} (₹${feeStructure.amount}, ID: ${createdAssignment._id})`);
 
       migrationResult.newAssignments.push({
-        assignmentId: newAssignment._id,
+        assignmentId: createdAssignment._id,
         feeName: feeStructure.name,
         category: category,
         amount: feeStructure.amount,
@@ -226,7 +246,7 @@ class FeeMigrationService {
   /**
    * Apply available credits to new assignments automatically
    */
-  static async applyAvailableCredits(studentId, tenantId, migrationResult) {
+  static async applyAvailableCredits(studentId, tenantId, migrationResult, session) {
     console.log(`\nApplying available credits...`);
 
     // Get all available credits for the student (including those just created)
@@ -246,7 +266,7 @@ class FeeMigrationService {
       student: studentId,
       tenant: tenantId,
       status: { $in: [FEE_STATUS.PENDING, FEE_STATUS.PARTIALLY_PAID] }
-    }).populate('feeStructure').sort({ dueDate: 1 }); // Apply to earliest due dates first
+    }).populate('feeStructure').sort({ dueDate: 1 }).session(session); // Apply to earliest due dates first
 
     console.log(`Found ${pendingAssignments.length} pending assignments for credit application:`);
 
