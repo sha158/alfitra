@@ -1999,13 +1999,42 @@ async function getTodayAttendanceSummary(tenantId) {
 const markTeacherAttendance = async (req, res) => {
   try {
     const { teacherId, date, status, remarks, checkInTime, checkOutTime, lateBy } = req.body;
-    
+
     // Validate required fields
     if (!teacherId || !date || !status) {
       return res.status(400).json({
         success: false,
         message: 'Teacher ID, date, and status are required'
       });
+    }
+
+    // Enhanced validation for time entries
+    if (checkInTime && checkOutTime) {
+      const checkIn = new Date(checkInTime);
+      const checkOut = new Date(checkOutTime);
+
+      if (checkIn >= checkOut) {
+        return res.status(400).json({
+          success: false,
+          message: 'Check-out time must be after check-in time'
+        });
+      }
+
+      // Validate that times are reasonable (not in future for today's date)
+      const attendanceDate = new Date(date);
+      const today = new Date();
+      attendanceDate.setHours(0, 0, 0, 0);
+      today.setHours(0, 0, 0, 0);
+
+      if (attendanceDate.getTime() === today.getTime()) {
+        const now = new Date();
+        if (checkOut > now) {
+          return res.status(400).json({
+            success: false,
+            message: 'Check-out time cannot be in the future for today\'s attendance'
+          });
+        }
+      }
     }
     
     // Verify teacher exists and belongs to the same tenant
@@ -2034,15 +2063,37 @@ const markTeacherAttendance = async (req, res) => {
       date: attendanceDate
     });
     
+    // Helper function to calculate late minutes
+    const calculateLateMinutes = (checkInTime, expectedStartTime = '09:00') => {
+      if (!checkInTime) return null;
+
+      const checkIn = new Date(checkInTime);
+      const [hours, minutes] = expectedStartTime.split(':');
+      const expectedStart = new Date(checkIn);
+      expectedStart.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+
+      if (checkIn > expectedStart) {
+        return Math.round((checkIn - expectedStart) / (1000 * 60)); // minutes late
+      }
+      return 0; // not late
+    };
+
     if (existingAttendance) {
       // Update existing attendance
       existingAttendance.status = status;
       existingAttendance.remarks = remarks || existingAttendance.remarks;
       existingAttendance.checkInTime = checkInTime ? new Date(checkInTime) : existingAttendance.checkInTime;
       existingAttendance.checkOutTime = checkOutTime ? new Date(checkOutTime) : existingAttendance.checkOutTime;
-      existingAttendance.lateBy = lateBy || existingAttendance.lateBy;
+
+      // Auto-calculate lateBy if checkInTime is provided and lateBy is not manually set
+      if (checkInTime && !lateBy) {
+        existingAttendance.lateBy = calculateLateMinutes(checkInTime);
+      } else if (lateBy !== undefined) {
+        existingAttendance.lateBy = lateBy;
+      }
+
       existingAttendance.markedBy = req.user._id;
-      
+
       await existingAttendance.save();
       
       return res.status(200).json({
@@ -2062,7 +2113,7 @@ const markTeacherAttendance = async (req, res) => {
       remarks,
       checkInTime: checkInTime ? new Date(checkInTime) : null,
       checkOutTime: checkOutTime ? new Date(checkOutTime) : null,
-      lateBy: lateBy || null
+      lateBy: lateBy !== undefined ? lateBy : (checkInTime ? calculateLateMinutes(checkInTime) : null)
     });
     
     res.status(201).json({
@@ -2474,7 +2525,7 @@ const getMonthlyAttendanceReport = async (req, res) => {
 const bulkMarkTeacherAttendance = async (req, res) => {
   try {
     const { date, attendanceData } = req.body;
-    
+
     // Validate required fields
     if (!date || !attendanceData || !Array.isArray(attendanceData)) {
       return res.status(400).json({
@@ -2482,11 +2533,26 @@ const bulkMarkTeacherAttendance = async (req, res) => {
         message: 'Date and attendance data array are required'
       });
     }
-    
+
     // Convert date to start of day for consistent comparison
     const attendanceDate = new Date(date);
     attendanceDate.setHours(0, 0, 0, 0);
-    
+
+    // Helper function to calculate late minutes
+    const calculateLateMinutes = (checkInTime, expectedStartTime = '09:00') => {
+      if (!checkInTime) return null;
+
+      const checkIn = new Date(checkInTime);
+      const [hours, minutes] = expectedStartTime.split(':');
+      const expectedStart = new Date(checkIn);
+      expectedStart.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+
+      if (checkIn > expectedStart) {
+        return Math.round((checkIn - expectedStart) / (1000 * 60)); // minutes late
+      }
+      return 0; // not late
+    };
+
     const results = [];
     const errors = [];
     
@@ -2520,15 +2586,33 @@ const bulkMarkTeacherAttendance = async (req, res) => {
           date: attendanceDate
         });
         
+        // Validate time entries for this teacher
+        if (checkInTime && checkOutTime) {
+          const checkIn = new Date(checkInTime);
+          const checkOut = new Date(checkOutTime);
+
+          if (checkIn >= checkOut) {
+            errors.push({ teacherId, error: 'Check-out time must be after check-in time' });
+            continue;
+          }
+        }
+
         if (existingAttendance) {
           // Update existing attendance
           existingAttendance.status = status;
           existingAttendance.remarks = remarks || existingAttendance.remarks;
           existingAttendance.checkInTime = checkInTime ? new Date(checkInTime) : existingAttendance.checkInTime;
           existingAttendance.checkOutTime = checkOutTime ? new Date(checkOutTime) : existingAttendance.checkOutTime;
-          existingAttendance.lateBy = lateBy || existingAttendance.lateBy;
+
+          // Auto-calculate lateBy if checkInTime is provided and lateBy is not manually set
+          if (checkInTime && !lateBy) {
+            existingAttendance.lateBy = calculateLateMinutes(checkInTime);
+          } else if (lateBy !== undefined) {
+            existingAttendance.lateBy = lateBy;
+          }
+
           existingAttendance.markedBy = req.user._id;
-          
+
           await existingAttendance.save();
           results.push({ teacherId, action: 'updated', attendance: existingAttendance });
         } else {
@@ -2542,9 +2626,9 @@ const bulkMarkTeacherAttendance = async (req, res) => {
             remarks,
             checkInTime: checkInTime ? new Date(checkInTime) : null,
             checkOutTime: checkOutTime ? new Date(checkOutTime) : null,
-            lateBy: lateBy || null
+            lateBy: lateBy !== undefined ? lateBy : (checkInTime ? calculateLateMinutes(checkInTime) : null)
           });
-          
+
           results.push({ teacherId, action: 'created', attendance });
         }
       } catch (error) {
