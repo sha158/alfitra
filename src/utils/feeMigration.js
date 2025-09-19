@@ -212,55 +212,10 @@ class FeeMigrationService {
       console.log(`✓ Created credit of ${paidAmount} for cancelled fee`);
     }
 
-    // Step 3: Find equivalent fee structure in new class
-    let newFeeStructure = null;
-
-    if (category) {
-      newFeeStructure = await FeeStructure.findOne({
-        tenant: tenantId,
-        category: category,
-        classes: newClassId,
-        isActive: true
-      });
-    } else {
-      // If no category, try to find by name (fallback for uncategorized fees)
-      newFeeStructure = await FeeStructure.findOne({
-        tenant: tenantId,
-        classes: newClassId,
-        isActive: true
-      });
-    }
-
-    if (newFeeStructure) {
-      // Create new assignment for new class
-      const newAssignment = await FeeAssignment.create({
-        tenant: tenantId,
-        student: assignment.student,
-        feeStructure: newFeeStructure._id,
-        academicYear: newFeeStructure.academicYear,
-        totalAmount: newFeeStructure.amount,
-        discount: { amount: 0 },
-        finalAmount: newFeeStructure.amount,
-        dueDate: this.calculateDueDate(newFeeStructure.frequency, newFeeStructure.dueDate),
-        status: FEE_STATUS.PENDING,
-        paidAmount: 0
-      });
-
-      console.log(`✓ Created new assignment: ${newFeeStructure.name} (₹${newFeeStructure.amount}, ID: ${newAssignment._id})`);
-
-      migrationResult.newAssignments.push({
-        assignmentId: newAssignment._id,
-        feeName: newFeeStructure.name,
-        category: category ? category.toString() : 'NO_CATEGORY',
-        amount: newFeeStructure.amount,
-        oldAmount: assignment.finalAmount,
-        creditAvailable: paidAmount
-      });
-
-      migrationResult.summary.newFeesAssigned += 1;
-    } else {
-      console.log(`⚠ No equivalent fee structure found in new class for category: ${category}`);
-    }
+    // Note: We don't create new assignments here anymore
+    // New assignments will be created in Step 3 (assignNewClassFees)
+    // This avoids duplicate assignments
+    console.log(`✓ Old assignment cancelled and credit created. New assignments will be created in Step 3.`);
   }
 
   /**
@@ -290,46 +245,14 @@ class FeeMigrationService {
       return;
     }
 
-    // Get student's current ACTIVE assignments (excluding cancelled ones)
-    const currentAssignments = await FeeAssignment.find({
-      student: studentId,
-      tenant: tenantId,
-      status: { $ne: 'cancelled' }
-    }).populate('feeStructure');
-
-    console.log(`Found ${currentAssignments.length} current active assignments:`);
-    currentAssignments.forEach((assignment, index) => {
-      console.log(`  ${index + 1}. ${assignment.feeStructure?.name || 'Unknown'} (Category: ${assignment.feeStructure?.category})`);
-    });
-
-    const existingCategories = new Set();
-
-    // Only include non-cancelled assignments in the existing categories check
-    currentAssignments.forEach(assignment => {
-      if (assignment.feeStructure && assignment.status !== 'cancelled' && assignment.feeStructure.category) {
-        existingCategories.add(assignment.feeStructure.category.toString());
-      }
-    });
-
-    console.log(`Existing categories: [${Array.from(existingCategories).join(', ')}]`);
+    // Since we cancelled all old class assignments in Step 2,
+    // we need to create ALL fee structures for the new class
+    console.log(`Creating assignments for ALL fee structures in the new class...`);
 
     for (const feeStructure of newClassFeeStructures) {
       const category = feeStructure.category ? feeStructure.category.toString() : 'NO_CATEGORY';
 
-      console.log(`\n🔍 Checking fee structure: ${feeStructure.name}, category: ${category}`);
-      console.log(`   Amount: ₹${feeStructure.amount}`);
-      console.log(`   Category exists in student's current assignments: ${existingCategories.has(category)}`);
-
-      // For fee structures without categories, always create new assignment
-      // (since we can't determine if it's a duplicate based on category)
-      if (category === 'NO_CATEGORY') {
-        console.log(`   ✅ Will create new assignment for ${feeStructure.name} (no category - treating as new)`);
-      } else if (existingCategories.has(category)) {
-        console.log(`   ⏭️ Skipping ${feeStructure.name} - category already exists`);
-        continue;
-      } else {
-        console.log(`   ✅ Will create new assignment for ${feeStructure.name}`);
-      }
+      console.log(`\n✅ Creating assignment for: ${feeStructure.name}, category: ${category}, amount: ₹${feeStructure.amount}`);
 
       // Create new assignment
       const newAssignment = await FeeAssignment.create({
@@ -354,7 +277,7 @@ class FeeMigrationService {
         amount: feeStructure.amount,
         oldAmount: 0,
         creditAvailable: 0,
-        isNewCategory: true
+        isNewClassAssignment: true
       });
 
       migrationResult.summary.newFeesAssigned += 1;
@@ -375,7 +298,8 @@ class FeeMigrationService {
       return;
     }
 
-    console.log(`Found ${availableCredits.length} available credits totaling: ₹${availableCredits.reduce((sum, c) => sum + c.remainingAmount, 0)}`);
+    const totalCreditsAvailable = availableCredits.reduce((sum, c) => sum + c.remainingAmount, 0);
+    console.log(`Found ${availableCredits.length} available credits totaling: ₹${totalCreditsAvailable}`);
 
     // Get ALL pending assignments for the student (not just new ones)
     // This ensures credits are applied to any unpaid fees
@@ -386,6 +310,15 @@ class FeeMigrationService {
     }).populate('feeStructure').sort({ dueDate: 1 }); // Apply to earliest due dates first
 
     console.log(`Found ${pendingAssignments.length} pending assignments for credit application:`);
+
+    let totalPendingAmount = 0;
+    pendingAssignments.forEach((assignment, index) => {
+      const pendingForThis = assignment.finalAmount - (assignment.paidAmount || 0);
+      totalPendingAmount += pendingForThis;
+      console.log(`  ${index + 1}. ${assignment.feeStructure?.name} - ₹${assignment.finalAmount} (Paid: ₹${assignment.paidAmount || 0}, Pending: ₹${pendingForThis})`);
+    });
+
+    console.log(`Total pending amount before credit application: ₹${totalPendingAmount}`);
 
     let totalCreditsApplied = 0;
 
@@ -444,7 +377,36 @@ class FeeMigrationService {
     }
 
     migrationResult.summary.totalCreditsApplied = totalCreditsApplied;
+    console.log(`\n=== CREDIT APPLICATION SUMMARY ===`);
+    console.log(`Total credits available: ₹${totalCreditsAvailable}`);
     console.log(`Total credits applied: ₹${totalCreditsApplied}`);
+    console.log(`Remaining credits: ₹${totalCreditsAvailable - totalCreditsApplied}`);
+
+    // Show final status of all assignments
+    const finalAssignments = await FeeAssignment.find({
+      student: studentId,
+      tenant: tenantId,
+      status: { $ne: 'cancelled' }
+    }).populate('feeStructure');
+
+    let finalTotalAmount = 0;
+    let finalPaidAmount = 0;
+    let finalPendingAmount = 0;
+
+    console.log(`\n=== FINAL ASSIGNMENT STATUS ===`);
+    finalAssignments.forEach((assignment, index) => {
+      const pending = assignment.finalAmount - (assignment.paidAmount || 0);
+      finalTotalAmount += assignment.finalAmount;
+      finalPaidAmount += (assignment.paidAmount || 0);
+      finalPendingAmount += pending;
+      console.log(`  ${index + 1}. ${assignment.feeStructure?.name} - ₹${assignment.finalAmount} (Paid: ₹${assignment.paidAmount || 0}, Pending: ₹${pending}) [${assignment.status}]`);
+    });
+
+    console.log(`\n📊 TOTALS:`);
+    console.log(`   Total Amount: ₹${finalTotalAmount}`);
+    console.log(`   Paid Amount: ₹${finalPaidAmount}`);
+    console.log(`   Pending Amount: ₹${finalPendingAmount}`);
+    console.log(`================================`);
   }
 
   /**
