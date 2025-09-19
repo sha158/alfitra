@@ -48,18 +48,67 @@ class FeeMigrationService {
         console.log(`  ${index + 1}. ${assignment.feeStructure?.name || 'Unknown'} - ₹${assignment.finalAmount} (Paid: ₹${assignment.paidAmount || 0}) [Status: ${assignment.status}]`);
       });
 
-      // Step 2: Process each assignment based on category
-      console.log('\n--- Step 2: Processing assignments by category ---');
+      // Step 2: Cancel ALL old class assignments and create credits
+      console.log('\n--- Step 2: Cancelling ALL old class assignments ---');
       for (const assignment of currentAssignments) {
         console.log(`Processing assignment: ${assignment.feeStructure?.name} (${assignment.feeStructure?.category})`);
-        await this.processAssignmentByCategory(
-          assignment,
-          oldClassId,
-          newClassId,
-          tenantId,
-          userId,
-          migrationResult
+
+        const paidAmount = assignment.paidAmount || 0;
+
+        // Cancel the old assignment
+        console.log(`Attempting to cancel assignment ID: ${assignment._id}`);
+
+        const cancellationResult = await FeeAssignment.findByIdAndUpdate(
+          assignment._id,
+          {
+            status: 'cancelled',
+            cancelledAt: new Date(),
+            cancelledBy: userId,
+            cancellationReason: `Class change from ${oldClassId} to ${newClassId}`
+          },
+          { new: true }
         );
+
+        if (!cancellationResult) {
+          console.error(`❌ FAILED to cancel assignment ${assignment._id} - assignment not found`);
+        } else {
+          console.log(`✓ Successfully cancelled assignment: ${assignment.feeStructure?.name} (status: ${cancellationResult.status})`);
+          console.log(`   Assignment ID: ${cancellationResult._id}`);
+          console.log(`   Cancelled at: ${cancellationResult.cancelledAt}`);
+        }
+
+        migrationResult.cancelledAssignments.push({
+          assignmentId: assignment._id,
+          feeName: assignment.feeStructure.name,
+          paidAmount: paidAmount,
+          finalAmount: assignment.finalAmount
+        });
+
+        // Create credit if payment was made
+        if (paidAmount > 0) {
+          const credit = await FeeCredit.create({
+            tenant: tenantId,
+            student: assignment.student,
+            originalAssignment: assignment._id,
+            creditAmount: paidAmount,
+            usedAmount: 0,
+            remainingAmount: paidAmount,
+            reason: 'class_change_overpayment',
+            reasonDetails: `Credit created from cancelled ${assignment.feeStructure.name} due to class change`,
+            createdBy: userId
+          });
+
+          migrationResult.creditsCreated.push({
+            creditId: credit._id,
+            amount: paidAmount,
+            reason: credit.reason,
+            originalFee: assignment.feeStructure.name
+          });
+
+          migrationResult.summary.totalCreditsCreated += paidAmount;
+
+          console.log(`✓ Created credit of ₹${paidAmount} for cancelled fee`);
+        }
       }
 
       // Step 3: Auto-assign new class fees
@@ -80,6 +129,19 @@ class FeeMigrationService {
         migrationResult
       );
 
+      // Step 5: Verification - Ensure no old assignments are still active
+      console.log('\n--- Step 5: Verification ---');
+      const remainingActiveAssignments = await FeeAssignment.find({
+        student: studentId,
+        tenant: tenantId,
+        status: { $ne: 'cancelled' }
+      }).populate('feeStructure');
+
+      console.log(`Found ${remainingActiveAssignments.length} active assignments after migration:`);
+      remainingActiveAssignments.forEach((assignment, index) => {
+        console.log(`  ${index + 1}. ${assignment.feeStructure?.name} - ₹${assignment.finalAmount} (Paid: ₹${assignment.paidAmount || 0}) [${assignment.status}]`);
+      });
+
       console.log(`=== Migration Complete ===`);
       console.log(`Credits Created: ${migrationResult.summary.totalCreditsCreated}`);
       console.log(`Credits Applied: ${migrationResult.summary.totalCreditsApplied}`);
@@ -94,129 +156,6 @@ class FeeMigrationService {
     }
   }
 
-  /**
-   * Process individual assignment based on its category
-   */
-  static async processAssignmentByCategory(assignment, oldClassId, newClassId, tenantId, userId, migrationResult) {
-    const category = assignment.feeStructure?.category;
-    const paidAmount = assignment.paidAmount || 0;
-
-    console.log(`\nProcessing assignment: ${assignment.feeStructure?.name}`);
-    console.log(`Category: ${category}`);
-    console.log(`Paid Amount: ${paidAmount}`);
-    console.log(`Final Amount: ${assignment.finalAmount}`);
-
-    let categoryCode = 'NO_CATEGORY';
-
-    if (category) {
-      // Get category information by ObjectId
-      const categoryInfo = await FeeCategory.findOne({
-        tenant: tenantId,
-        _id: category
-      });
-
-      categoryCode = categoryInfo?.code || category.toString();
-    }
-
-    console.log(`Category Code: ${categoryCode}`);
-
-    if (this.isCategoryPreservedAcrossClasses(categoryCode)) {
-      // Keep transport, library, and other shared fees as-is
-      console.log(`✓ Preserving ${categoryCode} fee (shared across classes)`);
-      migrationResult.preservedAssignments.push({
-        assignmentId: assignment._id,
-        feeName: assignment.feeStructure.name,
-        category: categoryCode,
-        reason: 'Category preserved across classes'
-      });
-      migrationResult.summary.preservedFees += 1;
-
-    } else {
-      // Handle class-specific fees (tuition, lab, etc.)
-      await this.migrateClassSpecificFee(
-        assignment,
-        newClassId,
-        tenantId,
-        userId,
-        migrationResult
-      );
-    }
-  }
-
-  /**
-   * Check if category should be preserved across class changes
-   */
-  static isCategoryPreservedAcrossClasses(categoryCode) {
-    const preservedCategories = [
-      'TRANSPORT',
-      'LIBRARY',
-      'SPORTS',
-      'OTHER'
-    ];
-    return preservedCategories.includes(categoryCode?.toUpperCase());
-  }
-
-  /**
-   * Migrate class-specific fees (tuition, lab, etc.)
-   */
-  static async migrateClassSpecificFee(assignment, newClassId, tenantId, userId, migrationResult) {
-    const paidAmount = assignment.paidAmount || 0;
-    const category = assignment.feeStructure?.category;
-
-    console.log(`Migrating class-specific fee: ${assignment.feeStructure?.name}`);
-
-    // Step 1: Cancel old assignment
-    const cancellationResult = await FeeAssignment.findByIdAndUpdate(
-      assignment._id,
-      {
-        status: 'cancelled',
-        cancelledAt: new Date(),
-        cancelledBy: userId,
-        cancellationReason: `Class change - fee migrated to new class`
-      },
-      { new: true }
-    );
-
-    console.log(`✓ Cancelled old assignment: ${assignment.feeStructure?.name} (status: ${cancellationResult.status})`);
-
-    migrationResult.cancelledAssignments.push({
-      assignmentId: assignment._id,
-      feeName: assignment.feeStructure.name,
-      paidAmount: paidAmount,
-      finalAmount: assignment.finalAmount
-    });
-
-    // Step 2: Create credit if payment was made
-    if (paidAmount > 0) {
-      const credit = await FeeCredit.create({
-        tenant: tenantId,
-        student: assignment.student,
-        originalAssignment: assignment._id,
-        creditAmount: paidAmount,
-        usedAmount: 0,
-        remainingAmount: paidAmount,
-        reason: 'class_change_overpayment',
-        reasonDetails: `Credit created from cancelled ${assignment.feeStructure.name} due to class change`,
-        createdBy: userId
-      });
-
-      migrationResult.creditsCreated.push({
-        creditId: credit._id,
-        amount: paidAmount,
-        reason: credit.reason,
-        originalFee: assignment.feeStructure.name
-      });
-
-      migrationResult.summary.totalCreditsCreated += paidAmount;
-
-      console.log(`✓ Created credit of ${paidAmount} for cancelled fee`);
-    }
-
-    // Note: We don't create new assignments here anymore
-    // New assignments will be created in Step 3 (assignNewClassFees)
-    // This avoids duplicate assignments
-    console.log(`✓ Old assignment cancelled and credit created. New assignments will be created in Step 3.`);
-  }
 
   /**
    * Auto-assign new class fees that don't exist in old class
