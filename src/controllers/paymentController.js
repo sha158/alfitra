@@ -36,12 +36,26 @@ const validateEmail = (email) => {
 // @access  Public (adjust based on your auth requirements)
 const createPaymentIntent = async (req, res) => {
   try {
+    console.log('=== CREATE PAYMENT INTENT DEBUG ===');
+    console.log('Request body:', req.body);
+    console.log('Stripe config:', {
+      hasKey: !!process.env.STRIPE_SECRET_KEY,
+      keyPrefix: process.env.STRIPE_SECRET_KEY?.substring(0, 7),
+      defaultCurrency: STRIPE_CONFIG.currency
+    });
+
     const { amount, currency = STRIPE_CONFIG.currency, customerEmail, metadata = {} } = req.body;
 
+    console.log('Parsed values:', { amount, currency, customerEmail, metadata });
+
     // Validation
+    console.log('Starting validation...');
     validateAmount(amount);
+    console.log('Amount validation passed');
     validateCurrency(currency);
+    console.log('Currency validation passed');
     validateEmail(customerEmail);
+    console.log('Email validation passed');
 
     // Prepare payment intent data
     const paymentIntentData = {
@@ -67,7 +81,9 @@ const createPaymentIntent = async (req, res) => {
     }
 
     // Create payment intent with Stripe
+    console.log('Creating Stripe payment intent with data:', paymentIntentData);
     const paymentIntent = await stripe.paymentIntents.create(paymentIntentData);
+    console.log('Stripe payment intent created successfully:', paymentIntent.id);
 
     // Log payment intent creation
     const logData = {
@@ -109,7 +125,13 @@ const createPaymentIntent = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error creating payment intent:', error);
+    console.error('=== PAYMENT INTENT ERROR ===');
+    console.error('Error type:', error.constructor.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    console.error('Stripe error type:', error.type);
+    console.error('Stripe error code:', error.code);
+    console.error('Full error object:', error);
 
     // Handle Stripe-specific errors
     if (error.type === 'StripeCardError') {
