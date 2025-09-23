@@ -10,6 +10,15 @@ const connectDB = require('./src/config/database');
 // Connect to database first
 connectDB();
 
+// Validate Stripe configuration
+const { validateStripeConfig } = require('./src/config/stripe');
+try {
+  validateStripeConfig();
+} catch (error) {
+  console.error('Stripe configuration error:', error.message);
+  process.exit(1);
+}
+
 // Then import and start the app
 const app = require('./src/app');
 

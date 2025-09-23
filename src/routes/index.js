@@ -10,6 +10,7 @@ const parentRoutes = require('./parentRoutes');
 const commonRoutes = require('./commonRoutes');
 const superAdminRoutes = require('./superAdminRoutes');
 const hifzRoutes = require('./hifzRoutes');
+const paymentRoutes = require('./paymentRoutes');
 
 
 // Mount routes
@@ -20,5 +21,6 @@ router.use('/parent', parentRoutes);
 router.use('/superadmin', superAdminRoutes);
 router.use('/', commonRoutes);
 router.use('/hifz', hifzRoutes); // Common routes for all authenticated users
+router.use('/payments', paymentRoutes); // Payment processing routes
 
 module.exports = router;

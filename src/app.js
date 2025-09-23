@@ -46,7 +46,8 @@ app.get('/', (req, res) => {
       auth: '/api/auth',
       admin: '/api/admin',
       teacher: '/api/teacher',
-      parent: '/api/parent'
+      parent: '/api/parent',
+      payments: '/api/payments'
     }
   });
 });
