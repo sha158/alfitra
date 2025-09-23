@@ -1325,6 +1325,96 @@ const getFeeSummary = async (req, res) => {
   return getSchoolFeeSummary(req, res);
 };
 
+// @desc    Get all receipts for a specific student
+// @route   GET /api/admin/fees/receipts/student/:studentId
+// @access  Private/Admin
+const getStudentReceipts = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    // Verify student exists and belongs to the tenant
+    const student = await Student.findOne({
+      _id: studentId,
+      tenant: req.user.tenant._id
+    });
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    const receipts = await FeePayment.find({
+      tenant: req.user.tenant._id,
+      student: studentId,
+      status: 'completed'
+    })
+      .populate('student', 'firstName lastName studentId')
+      .populate('feeAssignment')
+      .populate('collectedBy', 'firstName lastName')
+      .sort('-paymentDate');
+
+    res.status(200).json({
+      success: true,
+      count: receipts.length,
+      data: receipts,
+      student: {
+        name: `${student.firstName} ${student.lastName}`,
+        studentId: student.studentId
+      }
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: 'Error fetching student receipts',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get a specific payment receipt by payment ID
+// @route   GET /api/admin/fees/receipts/:paymentId
+// @access  Private/Admin
+const getPaymentReceipt = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+
+    const receipt = await FeePayment.findOne({
+      _id: paymentId,
+      tenant: req.user.tenant._id,
+      status: 'completed'
+    })
+      .populate('student', 'firstName lastName studentId')
+      .populate({
+        path: 'feeAssignment',
+        populate: {
+          path: 'feeStructure',
+          select: 'name category frequency academicYear'
+        }
+      })
+      .populate('collectedBy', 'firstName lastName');
+
+    if (!receipt) {
+      return res.status(404).json({
+        success: false,
+        message: 'Receipt not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: receipt
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: 'Error fetching receipt',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createFeeStructure,
   getFeeStructures,
@@ -1339,5 +1429,7 @@ module.exports = {
   getSchoolFeeSummary,
   getClassFeeSummary,
   getStudentFeeSummary,
-  autoAssignClassFees
+  autoAssignClassFees,
+  getStudentReceipts,
+  getPaymentReceipt
 };

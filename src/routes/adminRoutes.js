@@ -54,9 +54,11 @@ const {
   getPayments,
   getStudentsByPaymentStatus,
   getFeeSummary,
-  getSchoolFeeSummary,   
-  getClassFeeSummary,   
-  getStudentFeeSummary
+  getSchoolFeeSummary,
+  getClassFeeSummary,
+  getStudentFeeSummary,
+  getStudentReceipts,
+  getPaymentReceipt
 } = require('../controllers/feeController');
 const {
   sendNotification,
@@ -180,6 +182,10 @@ router.get('/fees/student/:studentId', getStudentFees);
 router.post('/fees/payment', recordFeePayment);
 router.get('/fees/payments', getPayments);
 router.get('/fees/students-by-status', getStudentsByPaymentStatus);
+
+// Receipt routes
+router.get('/fees/receipts/student/:studentId', getStudentReceipts);
+router.get('/fees/receipts/:paymentId', getPaymentReceipt);
 
 // Fee Credits routes
 router.use('/fee-credits', require('./feeCreditRoutes'));
