@@ -279,8 +279,36 @@ const getPaymentIntent = async (req, res) => {
   }
 };
 
+// @desc    Debug Stripe configuration
+// @route   GET /api/payments/debug
+// @access  Public (remove in production)
+const debugStripeConfig = async (req, res) => {
+  try {
+    const hasStripeKey = !!process.env.STRIPE_SECRET_KEY;
+    const keyPrefix = process.env.STRIPE_SECRET_KEY ? process.env.STRIPE_SECRET_KEY.substring(0, 7) : 'NOT_SET';
+
+    res.status(200).json({
+      success: true,
+      debug: {
+        hasStripeKey: hasStripeKey,
+        keyPrefix: keyPrefix,
+        environment: process.env.NODE_ENV || 'development',
+        currency: process.env.STRIPE_DEFAULT_CURRENCY || 'usd',
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+};
+
 module.exports = {
   createPaymentIntent,
   confirmPayment,
-  getPaymentIntent
+  getPaymentIntent,
+  debugStripeConfig
 };

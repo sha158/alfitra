@@ -4,7 +4,8 @@ const router = express.Router();
 const {
   createPaymentIntent,
   confirmPayment,
-  getPaymentIntent
+  getPaymentIntent,
+  debugStripeConfig
 } = require('../controllers/paymentController');
 
 // Optional: Add authentication middleware
@@ -29,6 +30,11 @@ router.post('/confirm-payment', confirmPayment);
 // @desc    Get payment intent details
 // @access  Public (or Private if auth middleware is enabled)
 router.get('/payment-intent/:id', getPaymentIntent);
+
+// @route   GET /api/payments/debug
+// @desc    Debug Stripe configuration (REMOVE IN PRODUCTION)
+// @access  Public
+router.get('/debug', debugStripeConfig);
 
 // Example of how to add authentication to specific routes:
 // router.post('/create-payment-intent', protect, ensureTenant, createPaymentIntent);
