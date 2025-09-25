@@ -53,15 +53,39 @@ class FeeMigrationService {
         console.log(`  ${index + 1}. ${assignment.feeStructure?.name || 'Unknown'} - ₹${assignment.finalAmount} (Paid: ₹${assignment.paidAmount || 0}) [Status: ${assignment.status}]`);
       });
 
-      // Step 2: Cancel ALL old class assignments and create credits
-      console.log('\n--- Step 2: Cancelling ALL old class assignments ---');
+      // Step 2: Process old class assignments - preserve persistent fees, cancel others
+      console.log('\n--- Step 2: Processing old class assignments ---');
       for (const assignment of currentAssignments) {
         console.log(`Processing assignment: ${assignment.feeStructure?.name} (${assignment.feeStructure?.category})`);
 
         const paidAmount = assignment.paidAmount || 0;
 
-        // Cancel the old assignment
-        console.log(`Attempting to cancel assignment ID: ${assignment._id}`);
+        // Check if this fee category should persist during class changes
+        const FeeCategory = require('../models/FeeCategory');
+        const feeCategory = await FeeCategory.findOne({
+          tenant: tenantId,
+          code: assignment.feeStructure?.category
+        }).session(session);
+
+        const shouldPersist = feeCategory && feeCategory.persistsOnClassChange;
+
+        if (shouldPersist) {
+          console.log(`✓ Preserving persistent fee: ${assignment.feeStructure?.name} (${assignment.feeStructure?.category})`);
+
+          migrationResult.preservedAssignments.push({
+            assignmentId: assignment._id,
+            feeName: assignment.feeStructure.name,
+            category: assignment.feeStructure.category,
+            amount: assignment.finalAmount,
+            paidAmount: paidAmount
+          });
+
+          migrationResult.summary.preservedFees += 1;
+          continue; // Skip cancellation for persistent fees
+        }
+
+        // Cancel the old assignment (non-persistent fees only)
+        console.log(`Attempting to cancel non-persistent assignment ID: ${assignment._id}`);
 
         const cancellationResult = await FeeAssignment.findByIdAndUpdate(
           assignment._id,
@@ -202,12 +226,21 @@ class FeeMigrationService {
       return;
     }
 
-    // Since we cancelled all old class assignments in Step 2,
-    // we need to create ALL fee structures for the new class
-    console.log(`Creating assignments for ALL fee structures in the new class...`);
+    // Create assignments only for fee structures that aren't already preserved
+    console.log(`Creating assignments for new class fee structures (excluding preserved ones)...`);
 
     for (const feeStructure of newClassFeeStructures) {
       const category = feeStructure.category ? feeStructure.category.toString() : 'NO_CATEGORY';
+
+      // Check if this category was already preserved
+      const alreadyPreserved = migrationResult.preservedAssignments.some(preserved =>
+        preserved.category === category
+      );
+
+      if (alreadyPreserved) {
+        console.log(`⏭️ Skipping ${feeStructure.name} (${category}) - already preserved from previous class`);
+        continue;
+      }
 
       console.log(`\n✅ Creating assignment for: ${feeStructure.name}, category: ${category}, amount: ₹${feeStructure.amount}`);
 

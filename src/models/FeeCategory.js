@@ -39,6 +39,12 @@ const feeCategorySchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+
+  // Whether this fee category should persist during class changes
+  persistsOnClassChange: {
+    type: Boolean,
+    default: false // Only specific categories like transport should persist
   }
 }, {
   timestamps: true
@@ -66,14 +72,14 @@ feeCategorySchema.pre('save', async function(next) {
 // Static method to get default categories
 feeCategorySchema.statics.getDefaultCategories = function() {
   return [
-    { name: 'Tuition Fee', code: 'TUITION', isSystem: true, displayOrder: 1 },
-    { name: 'Transport Fee', code: 'TRANSPORT', isSystem: true, displayOrder: 2 },
-    { name: 'Library Fee', code: 'LIBRARY', isSystem: true, displayOrder: 3 },
-    { name: 'Laboratory Fee', code: 'LABORATORY', isSystem: true, displayOrder: 4 },
-    { name: 'Sports Fee', code: 'SPORTS', isSystem: true, displayOrder: 5 },
-    { name: 'Exam Fee', code: 'EXAM', isSystem: true, displayOrder: 6 },
-    { name: 'Admission Fee', code: 'ADMISSION', isSystem: true, displayOrder: 7 },
-    { name: 'Other', code: 'OTHER', isSystem: true, displayOrder: 999 }
+    { name: 'Tuition Fee', code: 'TUITION', isSystem: true, displayOrder: 1, persistsOnClassChange: false },
+    { name: 'Transport Fee', code: 'TRANSPORT', isSystem: true, displayOrder: 2, persistsOnClassChange: true },
+    { name: 'Library Fee', code: 'LIBRARY', isSystem: true, displayOrder: 3, persistsOnClassChange: false },
+    { name: 'Laboratory Fee', code: 'LABORATORY', isSystem: true, displayOrder: 4, persistsOnClassChange: false },
+    { name: 'Sports Fee', code: 'SPORTS', isSystem: true, displayOrder: 5, persistsOnClassChange: false },
+    { name: 'Exam Fee', code: 'EXAM', isSystem: true, displayOrder: 6, persistsOnClassChange: false },
+    { name: 'Admission Fee', code: 'ADMISSION', isSystem: true, displayOrder: 7, persistsOnClassChange: false },
+    { name: 'Other', code: 'OTHER', isSystem: true, displayOrder: 999, persistsOnClassChange: false }
   ];
 };
 
