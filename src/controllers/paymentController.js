@@ -96,14 +96,21 @@ const createPaymentIntent = async (req, res) => {
       userId: req.user?._id || null
     };
 
-    if (req.user && req.user.tenant) {
-      await activityLogger.log(
-        req.user.tenant._id,
-        req.user._id,
-        'payment',
-        'Payment intent created',
-        logData
-      );
+    // Optional: Log using custom activity logger if user is authenticated
+    if (req.user && req.user.tenant && activityLogger.logCustomActivity) {
+      try {
+        await activityLogger.logCustomActivity(
+          req.user,
+          'payment_intent_created',
+          'Payment Intent Created',
+          `Created payment intent for $${(amount / 100).toFixed(2)} ${currency.toUpperCase()}`,
+          {
+            metadata: logData
+          }
+        );
+      } catch (logError) {
+        console.warn('Failed to log payment activity:', logError.message);
+      }
     }
 
     console.log('Payment intent created:', {
@@ -205,14 +212,21 @@ const confirmPayment = async (req, res) => {
       metadata: metadata
     };
 
-    if (req.user && req.user.tenant) {
-      await activityLogger.log(
-        req.user.tenant._id,
-        req.user._id,
-        'payment',
-        `Payment ${paymentIntent.status}`,
-        logData
-      );
+    // Optional: Log using custom activity logger if user is authenticated
+    if (req.user && req.user.tenant && activityLogger.logCustomActivity) {
+      try {
+        await activityLogger.logCustomActivity(
+          req.user,
+          'payment_confirmed',
+          'Payment Confirmed',
+          `Payment ${paymentIntent.status} for $${(paymentIntent.amount / 100).toFixed(2)} ${paymentIntent.currency.toUpperCase()}`,
+          {
+            metadata: logData
+          }
+        );
+      } catch (logError) {
+        console.warn('Failed to log payment confirmation:', logError.message);
+      }
     }
 
     console.log('Payment confirmation logged:', {
