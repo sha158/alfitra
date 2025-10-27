@@ -50,6 +50,11 @@ const homeworkSchema = new mongoose.Schema({
       default: Date.now
     }
   }],
+
+  imageUrls: [{
+    type: String,
+    trim: true
+  }],
   
   instructions: String,
   
