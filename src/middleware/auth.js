@@ -1,21 +1,37 @@
 // src/middleware/auth.js
+
+/**
+ * Authentication Middleware
+ * 
+ * This module provides JWT-based authentication middleware for protecting routes.
+ * It supports both required and optional authentication modes.
+ * 
+ * Features:
+ * - Token extraction from Authorization header (Bearer token) or cookies
+ * - JWT token verification using the secret from environment variables
+ * - User and tenant validation (active status checks)
+ * - Async/await pattern for non-blocking database operations
+ * 
+ * @module middleware/auth
+ */
+
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
 // Protect routes - verify JWT token
 const protect = async (req, res, next) => {
   let token;
-  
+
   // Check for token in headers
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     // Get token from header
     token = req.headers.authorization.split(' ')[1];
-  } 
+  }
   // Check for token in cookies
   else if (req.cookies && req.cookies.token) {
     token = req.cookies.token;
   }
-  
+
   // Make sure token exists
   if (!token) {
     return res.status(401).json({
@@ -23,21 +39,21 @@ const protect = async (req, res, next) => {
       message: 'Not authorized to access this route'
     });
   }
-  
+
   try {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
+
     // Get user from token
     req.user = await User.findById(decoded.id).populate('tenant');
-    
+
     if (!req.user) {
       return res.status(401).json({
         success: false,
         message: 'User not found'
       });
     }
-    
+
     // Check if user is active
     if (!req.user.isActive) {
       return res.status(401).json({
@@ -45,7 +61,7 @@ const protect = async (req, res, next) => {
         message: 'User account is deactivated'
       });
     }
-    
+
     // Check if tenant is active
     if (!req.user.tenant.isActive) {
       return res.status(401).json({
@@ -53,7 +69,7 @@ const protect = async (req, res, next) => {
         message: 'Your organization account is inactive'
       });
     }
-    
+
     next();
   } catch (error) {
     return res.status(401).json({
@@ -66,13 +82,13 @@ const protect = async (req, res, next) => {
 // Optional auth - doesn't fail if no token
 const optionalAuth = async (req, res, next) => {
   let token;
-  
+
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     token = req.headers.authorization.split(' ')[1];
   } else if (req.cookies && req.cookies.token) {
     token = req.cookies.token;
   }
-  
+
   if (token) {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -81,7 +97,7 @@ const optionalAuth = async (req, res, next) => {
       // Don't fail, just continue without user
     }
   }
-  
+
   next();
 };
 
